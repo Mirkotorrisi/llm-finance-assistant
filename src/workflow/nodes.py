@@ -14,10 +14,19 @@ from src.workflow.state import FinanceState
 
 load_dotenv()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 # Global Debug Flag
 DEBUG_MODE = "--debug" in sys.argv
+
+# Lazy client initialization
+_client = None
+
+
+def get_openai_client():
+    """Get or create OpenAI client."""
+    global _client
+    if _client is None:
+        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _client
 
 
 def asr_node(state: FinanceState) -> Dict:
@@ -93,6 +102,7 @@ Respond ONLY in valid JSON matching the schema.
         print("[DEBUG] NLU - User Prompt:", user_prompt)
 
     try:
+        client = get_openai_client()
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -187,6 +197,7 @@ def generator_node(state: FinanceState) -> Dict:
         print("\n[DEBUG] Generator - System Instruction:", system_instr)
         print("[DEBUG] Generator - User Instruction:", user_instr)
 
+    client = get_openai_client()
     completion = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
