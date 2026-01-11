@@ -44,7 +44,7 @@ def asr_node(state: FinanceState) -> Dict:
     if user_input.is_audio:
         recognizer = sr.Recognizer()
         try:
-            # Note: user_input.text contains path to wav file when is_audio is True
+            # Note: user_input.text contains path to temporary audio file when is_audio is True
             with sr.AudioFile(user_input.text) as source:
                 audio = recognizer.record(source)
             transcription = recognizer.recognize_google(audio)

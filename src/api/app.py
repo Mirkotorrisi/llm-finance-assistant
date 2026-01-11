@@ -5,6 +5,7 @@ import io
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from typing import Union
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +15,57 @@ from src.models import Action, FinancialParameters, UserInput
 from src.workflow import create_assistant_graph
 from src.workflow.state import FinanceState
 from src.workflow.graph import get_mcp_server
+
+# Maximum audio file size (10 MB)
+MAX_AUDIO_SIZE = 10 * 1024 * 1024
+
+
+@contextmanager
+def temporary_audio_file(audio_data: str):
+    """Context manager for creating and cleaning up temporary audio files.
+    
+    Args:
+        audio_data: Base64-encoded audio data
+        
+    Yields:
+        Path to temporary audio file
+        
+    Raises:
+        HTTPException: If audio data is invalid or too large
+    """
+    temp_path = None
+    try:
+        # Decode and validate audio data
+        try:
+            audio_bytes = base64.b64decode(audio_data)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 audio data: {str(e)}")
+        
+        # Check size limit
+        if len(audio_bytes) > MAX_AUDIO_SIZE:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Audio file too large. Maximum size is {MAX_AUDIO_SIZE / 1024 / 1024}MB"
+            )
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+            temp_audio.write(audio_bytes)
+            temp_path = temp_audio.name
+        
+        yield temp_path
+        
+    finally:
+        # Always clean up the temporary file
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception as e:
+                print(f"Warning: Failed to delete temporary file {temp_path}: {e}")
+
+
+# Maximum audio file size (10 MB)
+MAX_AUDIO_SIZE = 10 * 1024 * 1024
 
 app = FastAPI(
     title="Finance Assistant API",
@@ -101,43 +153,48 @@ async def chat(request: ChatRequest) -> ChatResponse:
     is_audio = request.is_audio
     
     if is_audio and request.audio_data:
-        # Save base64-encoded audio to a temporary file
+        # Use context manager to handle temporary audio file
+        with temporary_audio_file(request.audio_data) as temp_path:
+            state: FinanceState = {
+                "input": UserInput(text=temp_path, is_audio=is_audio),
+                "transcription": None,
+                "action": Action.UNKNOWN,
+                "parameters": FinancialParameters(),
+                "query_results": None,
+                "response": None,
+                "history": []
+            }
+            
+            result = assistant_graph.invoke(state)
+            
+            return ChatResponse(
+                response=result["response"],
+                action=result["action"].value,
+                parameters=result["parameters"].model_dump(exclude_none=True),
+                query_results=result["query_results"]
+            )
+    else:
+        state: FinanceState = {
+            "input": UserInput(text=text_to_process, is_audio=is_audio),
+            "transcription": None,
+            "action": Action.UNKNOWN,
+            "parameters": FinancialParameters(),
+            "query_results": None,
+            "response": None,
+            "history": []
+        }
+        
         try:
-            audio_bytes = base64.b64decode(request.audio_data)
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-                temp_audio.write(audio_bytes)
-                text_to_process = temp_audio.name
+            result = assistant_graph.invoke(state)
+            
+            return ChatResponse(
+                response=result["response"],
+                action=result["action"].value,
+                parameters=result["parameters"].model_dump(exclude_none=True),
+                query_results=result["query_results"]
+            )
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid audio data: {str(e)}")
-    
-    state: FinanceState = {
-        "input": UserInput(text=text_to_process, is_audio=is_audio),
-        "transcription": None,
-        "action": Action.UNKNOWN,
-        "parameters": FinancialParameters(),
-        "query_results": None,
-        "response": None,
-        "history": []
-    }
-    
-    try:
-        result = assistant_graph.invoke(state)
-        
-        # Clean up temporary audio file if created
-        if is_audio and request.audio_data and os.path.exists(text_to_process):
-            os.unlink(text_to_process)
-        
-        return ChatResponse(
-            response=result["response"],
-            action=result["action"].value,
-            parameters=result["parameters"].model_dump(exclude_none=True),
-            query_results=result["query_results"]
-        )
-    except Exception as e:
-        # Clean up temporary audio file if created
-        if is_audio and request.audio_data and os.path.exists(text_to_process):
-            os.unlink(text_to_process)
-        raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
 
 
 @app.websocket("/ws/chat")
@@ -174,47 +231,58 @@ async def websocket_chat(websocket: WebSocket):
                 is_audio = message_data.get("is_audio", False)
                 audio_data = message_data.get("audio_data")
                 
-                # Handle audio input
-                text_to_process = message
-                
+                # Handle audio input with validation
                 if is_audio and audio_data:
-                    # Save base64-encoded audio to a temporary file
                     try:
-                        audio_bytes = base64.b64decode(audio_data)
-                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-                            temp_audio.write(audio_bytes)
-                            text_to_process = temp_audio.name
-                    except Exception as e:
+                        with temporary_audio_file(audio_data) as temp_path:
+                            # Process the request
+                            state: FinanceState = {
+                                "input": UserInput(text=temp_path, is_audio=is_audio),
+                                "transcription": None,
+                                "action": Action.UNKNOWN,
+                                "parameters": FinancialParameters(),
+                                "query_results": None,
+                                "response": None,
+                                "history": history
+                            }
+                            
+                            result = assistant_graph.invoke(state)
+                            history = result["history"]
+                            
+                            # Send response
+                            await websocket.send_json({
+                                "response": result["response"],
+                                "action": result["action"].value,
+                                "parameters": result["parameters"].model_dump(exclude_none=True),
+                                "query_results": result["query_results"]
+                            })
+                    except HTTPException as he:
                         await websocket.send_json({
-                            "error": f"Invalid audio data: {str(e)}"
+                            "error": he.detail
                         })
                         continue
-                
-                # Process the request
-                state: FinanceState = {
-                    "input": UserInput(text=text_to_process, is_audio=is_audio),
-                    "transcription": None,
-                    "action": Action.UNKNOWN,
-                    "parameters": FinancialParameters(),
-                    "query_results": None,
-                    "response": None,
-                    "history": history
-                }
-                
-                result = assistant_graph.invoke(state)
-                history = result["history"]
-                
-                # Clean up temporary audio file if created
-                if is_audio and audio_data and os.path.exists(text_to_process):
-                    os.unlink(text_to_process)
-                
-                # Send response
-                await websocket.send_json({
-                    "response": result["response"],
-                    "action": result["action"].value,
-                    "parameters": result["parameters"].model_dump(exclude_none=True),
-                    "query_results": result["query_results"]
-                })
+                else:
+                    # Process text input
+                    state: FinanceState = {
+                        "input": UserInput(text=message, is_audio=False),
+                        "transcription": None,
+                        "action": Action.UNKNOWN,
+                        "parameters": FinancialParameters(),
+                        "query_results": None,
+                        "response": None,
+                        "history": history
+                    }
+                    
+                    result = assistant_graph.invoke(state)
+                    history = result["history"]
+                    
+                    # Send response
+                    await websocket.send_json({
+                        "response": result["response"],
+                        "action": result["action"].value,
+                        "parameters": result["parameters"].model_dump(exclude_none=True),
+                        "query_results": result["query_results"]
+                    })
                 
             except json.JSONDecodeError:
                 await websocket.send_json({
