@@ -12,6 +12,10 @@ python-dotenv = "*"
 fastapi = "*"
 uvicorn = {extras = ["standard"], version = "*"}
 websockets = "*"
+pypdf2 = "*"
+openpyxl = "*"
+pandas = "*"
+python-multipart = ">=0.0.18"
 
 [dev-packages]
 

@@ -1,18 +1,25 @@
 """FastAPI application for the finance assistant."""
 
 import base64
+import io
 import json
+import logging
 import os
 import tempfile
 from contextlib import contextmanager
 from typing import Union
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.models import Action, FinancialParameters, UserInput
 from src.workflow import create_assistant_graph, get_mcp_server
 from src.workflow.state import FinanceState
+from src.services import FileProcessor, FileValidationError, TransactionParser, VectorizationService
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Maximum audio file size (10 MB)
 MAX_AUDIO_SIZE = 10 * 1024 * 1024
@@ -93,6 +100,16 @@ class ChatResponse(BaseModel):
     query_results: Union[list, dict, float, bool, None] = None
 
 
+class UploadStatementResponse(BaseModel):
+    """Response model for statement upload endpoint."""
+    success: bool
+    message: str
+    transactions_processed: int
+    transactions_added: int
+    transactions_skipped: int
+    transactions: list
+
+
 @app.get("/")
 async def root():
     """Root endpoint."""
@@ -104,7 +121,8 @@ async def root():
             "chat": "/api/chat (POST)",
             "websocket": "/ws/chat (WebSocket)",
             "transactions": "/api/transactions (GET)",
-            "balance": "/api/balance (GET)"
+            "balance": "/api/balance (GET)",
+            "upload_statement": "/statements/upload (POST)"
         }
     }
 
@@ -133,6 +151,90 @@ async def get_balance():
     mcp_server = get_mcp_server()
     balance = mcp_server.get_balance()
     return {"balance": balance}
+
+
+@app.post("/statements/upload")
+async def upload_statement(file: UploadFile = File(...)) -> UploadStatementResponse:
+    """Upload and process a bank statement file.
+    
+    Accepts PDF, XLS/XLSX, or CSV files up to 10 MB.
+    Extracts transactions and adds them to the system.
+    
+    Args:
+        file: Uploaded file
+        
+    Returns:
+        Upload result with statistics
+        
+    Raises:
+        HTTPException: If file validation or processing fails
+    """
+    try:
+        # Read file content
+        file_content = await file.read()
+        file_size = len(file_content)
+        
+        logger.info(f"Received file upload: {file.filename}, size: {file_size} bytes")
+        
+        # Validate and process file
+        try:
+            extracted_data = FileProcessor.process_file(
+                file.filename,
+                io.BytesIO(file_content),
+                file_size
+            )
+        except FileValidationError as e:
+            logger.error(f"File validation error: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # Parse transactions
+        transactions = TransactionParser.parse_transactions(extracted_data)
+        
+        if not transactions:
+            return UploadStatementResponse(
+                success=True,
+                message="No valid transactions found in the file",
+                transactions_processed=len(extracted_data),
+                transactions_added=0,
+                transactions_skipped=0,
+                transactions=[]
+            )
+        
+        # Remove duplicates
+        mcp_server = get_mcp_server()
+        existing_transactions = mcp_server.list_transactions()
+        unique_transactions = TransactionParser.remove_duplicates(transactions, existing_transactions)
+        
+        # Add transactions to the system
+        added_transactions = mcp_server.add_transactions_bulk(unique_transactions)
+        
+        # Process for vectorization (optional - don't fail if it errors)
+        try:
+            vectorization_service = VectorizationService()
+            vectorization_service.process_transactions(unique_transactions)
+            logger.info("Transactions vectorized successfully")
+        except Exception as e:
+            logger.warning(f"Vectorization failed (non-critical): {str(e)}")
+        
+        logger.info(
+            f"Statement upload completed: {len(added_transactions)} transactions added, "
+            f"{len(transactions) - len(unique_transactions)} duplicates skipped"
+        )
+        
+        return UploadStatementResponse(
+            success=True,
+            message=f"Successfully processed {len(added_transactions)} transactions",
+            transactions_processed=len(extracted_data),
+            transactions_added=len(added_transactions),
+            transactions_skipped=len(transactions) - len(unique_transactions),
+            transactions=added_transactions
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
 
 @app.post("/api/chat")

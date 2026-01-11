@@ -56,7 +56,8 @@ class FinanceMCP:
         amount: float, 
         category: str, 
         description: str, 
-        date: str = None
+        date: str = None,
+        currency: str = None
     ) -> dict:
         """Add a new transaction.
         
@@ -65,6 +66,7 @@ class FinanceMCP:
             category: Transaction category
             description: Transaction description
             date: Transaction date (ISO format, defaults to today)
+            currency: Transaction currency (optional)
             
         Returns:
             The newly created transaction
@@ -78,6 +80,8 @@ class FinanceMCP:
             "category": category,
             "description": description
         }
+        if currency:
+            new_entry["currency"] = currency
         self.transactions.append(new_entry)
         self.next_id += 1
         return new_entry
@@ -102,3 +106,26 @@ class FinanceMCP:
             Current balance
         """
         return sum(t["amount"] for t in self.transactions)
+    
+    def add_transactions_bulk(self, transactions: List[dict]) -> List[dict]:
+        """Add multiple transactions at once.
+        
+        Args:
+            transactions: List of transaction dictionaries
+            
+        Returns:
+            List of added transactions with IDs
+        """
+        added_transactions = []
+        
+        for transaction in transactions:
+            new_transaction = self.add_transaction(
+                amount=transaction["amount"],
+                category=transaction["category"],
+                description=transaction["description"],
+                date=transaction.get("date"),
+                currency=transaction.get("currency")
+            )
+            added_transactions.append(new_transaction)
+        
+        return added_transactions
