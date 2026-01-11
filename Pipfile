@@ -10,6 +10,9 @@ speechrecognition = "*"
 dotenv = "*"
 openai = "*"
 python-dotenv = "*"
+fastapi = "*"
+uvicorn = {extras = ["standard"], version = "*"}
+websockets = "*"
 
 [dev-packages]
 
