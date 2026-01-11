@@ -64,9 +64,6 @@ def temporary_audio_file(audio_data: str):
                 print(f"Warning: Failed to delete temporary file {temp_path}: {e}")
 
 
-# Maximum audio file size (10 MB)
-MAX_AUDIO_SIZE = 10 * 1024 * 1024
-
 app = FastAPI(
     title="Finance Assistant API",
     description="A multimodal finance assistant supporting text and audio interactions",
