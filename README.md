@@ -55,7 +55,7 @@ llm-finance-assistant/
 
    Or using pip:
    ```bash
-   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets
+   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets pypdf2 openpyxl pandas python-multipart
    ```
 
 2. **Configure Environment**:
@@ -131,7 +131,39 @@ Once the server is running, visit:
    GET /api/balance
    ```
 
-4. **Chat (REST)**
+4. **Upload Bank Statement**
+   ```
+   POST /statements/upload
+   Content-Type: multipart/form-data
+   
+   Form data:
+   - file: Bank statement file (PDF, XLS/XLSX, or CSV, max 10 MB)
+   ```
+   
+   Supported file formats:
+   - **CSV**: Expects columns for date, description, amount (optionally currency, category)
+   - **Excel (XLS/XLSX)**: Expects columns for date, description, amount (optionally currency, category)
+   - **PDF**: Extracts text and attempts to parse transactions
+   
+   Features:
+   - Automatic duplicate detection (skips already existing transactions)
+   - Automatic categorization based on transaction descriptions
+   - Currency support (extracts from data or defaults to EUR)
+   - Transaction chunking and vectorization (requires OPENAI_API_KEY)
+   
+   Example response:
+   ```json
+   {
+     "success": true,
+     "message": "Successfully processed 5 transactions",
+     "transactions_processed": 5,
+     "transactions_added": 5,
+     "transactions_skipped": 0,
+     "transactions": [...]
+   }
+   ```
+
+5. **Chat (REST)**
    ```
    POST /api/chat
    Content-Type: application/json
@@ -200,6 +232,13 @@ response = requests.post(
     json={"message": "How much did I spend on food this week?"}
 )
 print(response.json())
+
+# Upload bank statement
+with open("statement.csv", "rb") as f:
+    files = {"file": ("statement.csv", f, "text/csv")}
+    response = requests.post("http://localhost:8000/statements/upload", files=files)
+    print(response.json())
+    # Output: {"success": true, "transactions_added": 5, ...}
 ```
 
 ### Using WebSocket with Python
@@ -225,9 +264,49 @@ async def chat():
 asyncio.run(chat())
 ```
 
+### Bank Statement Upload Format
+
+The `/statements/upload` endpoint accepts bank statements in CSV, Excel (XLS/XLSX), or PDF format. For best results, ensure your files contain the following columns (names are case-insensitive):
+
+#### CSV/Excel Format
+
+```csv
+date,description,amount,currency,category
+2026-01-11,Amazon payment,-49.90,EUR,Shopping
+2026-01-12,Grocery shopping,-125.50,USD,Food
+2026-01-13,Salary payment,2500.00,USD,Income
+```
+
+**Column mapping** (flexible field names):
+- **Date**: `date`, `transaction date`, `booking date`, `value date`
+- **Description**: `description`, `details`, `memo`, `narrative`, `transaction details`
+- **Amount**: `amount`, `value`, `debit`, `credit`, `transaction amount`
+- **Currency** (optional): `currency`, `ccy` - defaults to EUR if not provided
+- **Category** (optional): `category`, `type`, `transaction type` - auto-categorized if not provided
+
+#### PDF Format
+
+PDF files are parsed to extract text, and the system attempts to identify transactions using pattern matching. For best results, PDF statements should contain:
+- Date in format: DD/MM/YYYY or MM/DD/YYYY or YYYY-MM-DD
+- Clear transaction descriptions
+- Amounts with currency symbols ($, €, £) or numeric values
+
+#### Features
+
+- **Automatic duplicate detection**: The system checks if a transaction already exists (based on date, amount, and description) before adding it
+- **Smart categorization**: Transactions are automatically categorized into: food, transport, shopping, utilities, rent, income, or other
+- **Currency support**: Supports USD, EUR, GBP, JPY with automatic extraction from transaction data
+- **Error handling**: Clear error messages for unsupported formats or oversized files (max 10 MB)
+
 ## Development
 
 ### Running Tests
+
+Run unit tests with pytest:
+
+```bash
+python -m pytest tests/ -v
+```
 
 The application structure supports easy testing. You can test individual components:
 
@@ -252,6 +331,10 @@ print(params.model_dump())
 - **workflow/**: Contains the LangGraph-based agentic workflow with ASR, NLU, query execution, and response generation nodes
 - **models/**: Shared Pydantic models for type safety and validation
 - **api/**: FastAPI application with REST and WebSocket endpoints
+- **services/**: File processing, transaction parsing, and vectorization services
+  - `file_processor.py`: Validates and extracts data from PDF, Excel, and CSV files
+  - `transaction_parser.py`: Parses extracted data into standardized transaction format
+  - `vectorization.py`: Chunks transactions and generates embeddings for LLM queries
 
 ## Key Components
 
@@ -259,7 +342,8 @@ print(params.model_dump())
 
 The `FinanceMCP` class provides methods for:
 - `list_transactions()`: Query transactions with filters
-- `add_transaction()`: Add new transaction
+- `add_transaction()`: Add new transaction (with optional currency support)
+- `add_transactions_bulk()`: Add multiple transactions at once
 - `delete_transaction()`: Remove transaction by ID
 - `get_balance()`: Get current balance
 
@@ -274,9 +358,17 @@ The `FinanceMCP` class provides methods for:
 
 FastAPI application with:
 - REST endpoints for direct access to transactions and balance
+- POST endpoint for uploading and processing bank statements (PDF, Excel, CSV)
 - POST endpoint for processing chat requests
 - WebSocket endpoint for real-time bidirectional communication
 - Support for both text and audio inputs (base64-encoded)
+
+### File Processing Services
+
+The services module handles bank statement uploads:
+- **FileProcessor**: Validates file formats/sizes and extracts raw data from PDF, Excel, and CSV files
+- **TransactionParser**: Converts extracted data into standardized transaction format with automatic categorization
+- **VectorizationService**: Creates embeddings for transactions to enable semantic search with LLMs
 
 ## Contributing
 
@@ -285,6 +377,8 @@ The modular structure makes it easy to:
 - Add new workflow nodes in `workflow/nodes.py`
 - Extend API endpoints in `api/app.py`
 - Add new models in `models/domain.py`
+- Add new file format support in `services/file_processor.py`
+- Improve transaction parsing in `services/transaction_parser.py`
 
 ## License
 
