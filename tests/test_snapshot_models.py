@@ -151,7 +151,7 @@ class TestTransactionModelUpdates:
         assert hasattr(Transaction, 'account_id')
     
     def test_transaction_to_dict_includes_account_id(self):
-        """Test Transaction to_dict includes account_id."""
+        """Test Transaction to_dict includes account_id and currency."""
         from src.database.models import Transaction
         
         transaction = Transaction(
@@ -160,7 +160,8 @@ class TestTransactionModelUpdates:
             date=date(2026, 1, 12),
             amount=-50.0,
             category="food",
-            description="Grocery shopping"
+            description="Grocery shopping",
+            currency="USD"
         )
         
         result = transaction.to_dict()
@@ -171,6 +172,7 @@ class TestTransactionModelUpdates:
         assert result['amount'] == -50.0
         assert result['category'] == 'food'
         assert result['description'] == 'Grocery shopping'
+        assert result['currency'] == 'USD'
 
 
 class TestSnapshotService:

@@ -415,7 +415,8 @@ class SnapshotService:
         amount: float,
         category: str,
         description: str,
-        category_id: Optional[int] = None
+        category_id: Optional[int] = None,
+        currency: str = "EUR"
     ) -> Dict:
         """Add a transaction to an account.
         
@@ -429,6 +430,7 @@ class SnapshotService:
             category: Category name
             description: Transaction description
             category_id: Optional category ID reference
+            currency: Currency code (default: EUR)
             
         Returns:
             Dictionary representation of the created transaction
@@ -439,7 +441,8 @@ class SnapshotService:
             amount=amount,
             category=category,
             description=description,
-            category_id=category_id
+            category_id=category_id,
+            currency=currency
         )
         self.db.add(transaction)
         self.db.commit()

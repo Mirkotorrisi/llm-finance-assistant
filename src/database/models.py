@@ -144,11 +144,12 @@ class Transaction(Base):
     __tablename__ = "transactions"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True, index=True)  # Nullable for backward compatibility
     date = Column(Date, nullable=False, index=True)
     amount = Column(Float, nullable=False)  # positive = income, negative = expense
     category = Column(String(100), nullable=False, index=True)
     description = Column(String(500), nullable=False)
+    currency = Column(String(3), default="EUR")  # Kept for backward compatibility with existing code
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
@@ -174,5 +175,6 @@ class Transaction(Base):
             "date": self.date.isoformat() if self.date else None,
             "amount": self.amount,
             "category": self.category,
-            "description": self.description
+            "description": self.description,
+            "currency": self.currency
         }
