@@ -16,6 +16,9 @@ pypdf2 = "*"
 openpyxl = "*"
 pandas = "*"
 python-multipart = ">=0.0.18"
+sqlalchemy = "*"
+psycopg2-binary = "*"
+alembic = "*"
 
 [dev-packages]
 

@@ -27,3 +27,4 @@ htmlcov/
 .venv
 venv/
 ENV/
+test_database.py

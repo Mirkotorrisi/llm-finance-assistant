@@ -11,6 +11,7 @@ A professional, self-contained virtual assistant for managing personal finances.
   - Add expenses or income.
   - Delete transactions by ID.
   - Query historic spending with natural language (e.g., "last 3 days", "this week").
+- **PostgreSQL Persistence**: Optional database-backed storage with automatic table creation in development mode.
 - **State Management**: Built with `LangGraph` to manage conversational history and execution nodes.
 - **REST API & WebSocket**: FastAPI-based API for programmatic access and real-time chat via WebSocket.
 - **Debug Mode**: Includes a specialized logging mode to inspect LLM reasonings and system prompts.
@@ -23,8 +24,14 @@ The application is organized into a modular structure:
 llm-finance-assistant/
 ├── src/
 │   ├── business_logic/    # Business logic layer
-│   │   ├── mcp.py         # FinanceMCP class for transaction management
+│   │   ├── mcp.py         # FinanceMCP class (in-memory)
+│   │   ├── mcp_database.py # FinanceMCPDatabase class (PostgreSQL)
 │   │   └── data.py        # Initial data setup
+│   ├── database/          # Database layer
+│   │   ├── models.py      # SQLAlchemy ORM models
+│   │   └── init.py        # Database initialization
+│   ├── config/            # Configuration
+│   │   └── database.py    # Database configuration
 │   ├── workflow/          # Agentic workflow (LangGraph)
 │   │   ├── nodes.py       # Workflow nodes (ASR, NLU, Query, Generator)
 │   │   ├── graph.py       # Graph definition and compilation
@@ -35,6 +42,8 @@ llm-finance-assistant/
 │   │   └── app.py         # API endpoints and WebSocket handler
 │   ├── main_cli.py        # CLI entry point
 │   └── main_api.py        # API server entry point
+├── scripts/               # Utility scripts
+│   └── seed_database.py   # Database seeding script
 ├── finance_assistant.py   # Original monolithic file (deprecated)
 └── README.md
 ```
@@ -43,6 +52,7 @@ llm-finance-assistant/
 
 - Python 3.10+
 - OpenAI API Key
+- PostgreSQL Database (optional, for persistent storage)
 
 ## Setup
 
@@ -55,15 +65,44 @@ llm-finance-assistant/
 
    Or using pip:
    ```bash
-   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets pypdf2 openpyxl pandas python-multipart
+   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets pypdf2 openpyxl pandas python-multipart sqlalchemy psycopg2-binary alembic
    ```
 
 2. **Configure Environment**:
-   Create a `.env` file in the project root:
+   Create a `.env` file in the project root (use `.env.example` as a template):
 
    ```env
    OPENAI_API_KEY=your_actual_key_here
+   
+   # Database Configuration (optional)
+   DB_PASSWORD=your_database_password_here
+   ENVIRONMENT=development
+   USE_DATABASE=true
    ```
+
+   **Database Configuration Options:**
+   - `USE_DATABASE=true`: Use PostgreSQL for persistent storage
+   - `USE_DATABASE=false`: Use in-memory storage (default if DB_PASSWORD not set)
+   - `ENVIRONMENT=development`: Automatically create tables on startup
+   - `ENVIRONMENT=production`: Tables must be created manually
+
+3. **Database Setup** (Optional):
+   
+   If you want to use PostgreSQL for persistent storage:
+   
+   a. The connection details are configured in `src/config/database.py`:
+      - Host: `ai-financial-assistant-bollette.e.aivencloud.com`
+      - Port: `22782`
+      - Database: `defaultdb`
+      - User: `avnadmin`
+      - Password: Set via `DB_PASSWORD` environment variable
+   
+   b. In development mode, tables are created automatically on first run
+   
+   c. To seed the database with initial data:
+      ```bash
+      python scripts/seed_database.py
+      ```
 
 ## Usage
 
@@ -327,7 +366,15 @@ print(params.model_dump())
 
 ### Module Structure
 
-- **business_logic/**: Contains the core financial transaction logic (FinanceMCP)
+- **business_logic/**: Contains the core financial transaction logic
+  - `mcp.py`: In-memory transaction management (FinanceMCP)
+  - `mcp_database.py`: Database-backed transaction management (FinanceMCPDatabase)
+  - `data.py`: Initial sample data
+- **database/**: Database ORM models and initialization
+  - `models.py`: SQLAlchemy models for Transaction and Category tables
+  - `init.py`: Database connection and table creation logic
+- **config/**: Application configuration
+  - `database.py`: Database connection settings
 - **workflow/**: Contains the LangGraph-based agentic workflow with ASR, NLU, query execution, and response generation nodes
 - **models/**: Shared Pydantic models for type safety and validation
 - **api/**: FastAPI application with REST and WebSocket endpoints
@@ -336,16 +383,60 @@ print(params.model_dump())
   - `transaction_parser.py`: Parses extracted data into standardized transaction format
   - `vectorization.py`: Chunks transactions and generates embeddings for LLM queries
 
+### Database Persistence
+
+The application supports two storage modes:
+
+1. **In-Memory Storage** (Default when DB_PASSWORD not set):
+   - Fast and simple
+   - No setup required
+   - Data is lost when application restarts
+   - Good for testing and development
+
+2. **PostgreSQL Storage** (When USE_DATABASE=true and DB_PASSWORD is set):
+   - Persistent data storage
+   - Automatic table creation in development mode
+   - Two tables: `transactions` and `categories`
+   - Supports full transaction history
+
+**Database Tables:**
+
+- **transactions**: Stores all financial transactions
+  - id (primary key)
+  - date, amount, category, description, currency
+  - created_at, updated_at
+  
+- **categories**: Stores unique category names
+  - id (primary key)
+  - name (unique)
+  - created_at, updated_at
+
+**Automatic Migration:**
+In development mode (`ENVIRONMENT=development`), tables are automatically created on application startup using SQLAlchemy's `create_all()` method.
+
 ## Key Components
 
 ### FinanceMCP (Business Logic)
 
-The `FinanceMCP` class provides methods for:
+The application provides two implementations:
+
+1. **FinanceMCP** (In-Memory):
+   - Stores transactions in memory
+   - Fast and simple
+   - Located in `src/business_logic/mcp.py`
+
+2. **FinanceMCPDatabase** (PostgreSQL):
+   - Stores transactions in PostgreSQL
+   - Persistent storage
+   - Located in `src/business_logic/mcp_database.py`
+
+Both provide the same interface:
 - `list_transactions()`: Query transactions with filters
 - `add_transaction()`: Add new transaction (with optional currency support)
 - `add_transactions_bulk()`: Add multiple transactions at once
 - `delete_transaction()`: Remove transaction by ID
 - `get_balance()`: Get current balance
+- `get_existing_categories()`: Get list of unique categories
 
 ### Workflow Nodes
 
