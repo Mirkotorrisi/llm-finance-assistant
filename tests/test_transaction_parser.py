@@ -89,6 +89,81 @@ class TestCategorization:
         assert category == "other"
 
 
+class TestDynamicCategorization:
+    """Tests for LLM-based dynamic categorization."""
+    
+    def test_categorize_with_llm_fallback_when_no_api_key(self):
+        """Test that categorization falls back to rule-based when API key is missing."""
+        # This test ensures the fallback mechanism works
+        category = TransactionParser.categorize_transaction_with_llm(
+            "Grocery shopping", 
+            -50.0, 
+            ["income", "transport"],
+            openai_client=None  # Will trigger fallback if no API key
+        )
+        # Should fall back to rule-based categorization
+        assert category in ["food", "other"]  # Either rule-based or LLM result
+    
+    def test_parse_row_without_llm(self):
+        """Test parsing row without LLM categorization."""
+        row = {
+            "date": "2026-01-11",
+            "description": "Grocery",
+            "amount": "-50.00",
+            "currency": "USD"
+        }
+        
+        result = TransactionParser.parse_row(row, use_llm_categorization=False)
+        
+        assert result is not None
+        assert result["date"] == "2026-01-11"
+        assert result["description"] == "Grocery"
+        assert result["amount"] == -50.0
+        assert result["currency"] == "USD"
+        assert result["category"] == "food"  # Should use fallback categorization
+    
+    def test_parse_row_with_existing_categories(self):
+        """Test parsing row with existing categories passed in."""
+        row = {
+            "date": "2026-01-11",
+            "description": "Grocery",
+            "amount": "-50.00",
+            "currency": "USD"
+        }
+        
+        existing_categories = ["income", "transport", "food"]
+        
+        # Use fallback categorization for predictable test
+        result = TransactionParser.parse_row(
+            row, 
+            existing_categories=existing_categories,
+            use_llm_categorization=False
+        )
+        
+        assert result is not None
+        assert result["category"] == "food"
+    
+    def test_parse_transactions_accumulates_categories(self):
+        """Test that parse_transactions accumulates categories as it processes rows."""
+        rows = [
+            {"date": "2026-01-11", "description": "Grocery", "amount": "-50.00"},
+            {"date": "2026-01-12", "description": "Gas station", "amount": "-30.00"},
+            {"date": "2026-01-13", "description": "Salary", "amount": "2000.00"}
+        ]
+        
+        # Use fallback categorization for predictable test
+        transactions = TransactionParser.parse_transactions(
+            rows, 
+            existing_categories=[],
+            use_llm_categorization=False
+        )
+        
+        assert len(transactions) == 3
+        assert transactions[0]["category"] == "food"
+        assert transactions[1]["category"] == "transport"
+        assert transactions[2]["category"] == "income"
+
+
 class TestRowParsing:
     """Tests for row parsing."""
     

@@ -111,3 +111,45 @@ class TestGetBalance:
         balance = mcp.get_balance()
         
         assert balance == 1920.0
+
+
+class TestGetExistingCategories:
+    """Tests for getting existing categories."""
+    
+    def test_get_existing_categories(self):
+        """Test getting unique categories from transactions."""
+        initial_transactions = [
+            {"id": 1, "date": "2026-01-11", "amount": -50.0, "category": "food", "description": "Grocery"},
+            {"id": 2, "date": "2026-01-12", "amount": -30.0, "category": "transport", "description": "Gas"},
+            {"id": 3, "date": "2026-01-13", "amount": -25.0, "category": "food", "description": "Lunch"},
+            {"id": 4, "date": "2026-01-14", "amount": 2000.0, "category": "income", "description": "Salary"}
+        ]
+        
+        mcp = FinanceMCP(initial_transactions)
+        categories = mcp.get_existing_categories()
+        
+        assert len(categories) == 3
+        assert "food" in categories
+        assert "transport" in categories
+        assert "income" in categories
+    
+    def test_get_existing_categories_empty(self):
+        """Test getting categories when there are no transactions."""
+        mcp = FinanceMCP([])
+        categories = mcp.get_existing_categories()
+        
+        assert len(categories) == 0
+        assert categories == []
+    
+    def test_get_existing_categories_sorted(self):
+        """Test that categories are returned sorted."""
+        initial_transactions = [
+            {"id": 1, "date": "2026-01-11", "amount": -50.0, "category": "zzz", "description": "Test"},
+            {"id": 2, "date": "2026-01-12", "amount": -30.0, "category": "aaa", "description": "Test"},
+            {"id": 3, "date": "2026-01-13", "amount": -25.0, "category": "mmm", "description": "Test"}
+        ]
+        
+        mcp = FinanceMCP(initial_transactions)
+        categories = mcp.get_existing_categories()
+        
+        assert categories == ["aaa", "mmm", "zzz"]
