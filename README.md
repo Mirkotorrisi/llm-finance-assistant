@@ -4,6 +4,7 @@ A professional, self-contained virtual assistant for managing personal finances.
 
 ## Features
 
+- **Monthly-Based Financial Model**: Spreadsheet-inspired approach where monthly snapshots are the source of truth for balances. See [Monthly Data Model Documentation](docs/MONTHLY_DATA_MODEL.md) for details.
 - **Multimodal Interaction**: Supports text-based input and audio transcription (via `SpeechRecognition`).
 - **MCP Architecture**: Uses a Model Context Protocol (MCP) simulation to decouple business logic from the conversational flow.
 - **Intelligent NLU**: Powered by OpenAI's `gpt-4o-mini` to dynamically interpret user intent, categories, and timeframes.
@@ -16,6 +17,30 @@ A professional, self-contained virtual assistant for managing personal finances.
 - **REST API & WebSocket**: FastAPI-based API for programmatic access and real-time chat via WebSocket.
 - **Debug Mode**: Includes a specialized logging mode to inspect LLM reasonings and system prompts.
 
+## Data Model
+
+This application uses a **monthly-based financial model** where:
+
+- **Monthly snapshots** are the source of truth for account balances
+- **Transactions** are optional details, not authoritative for totals
+- **High-level numbers** (balances, totals) come from snapshots, not from aggregating transactions
+
+Key entities:
+- `Account` - Financial accounts (checking, savings, credit, etc.)
+- `MonthlyAccountSnapshot` - **Core entity** representing monthly financial state
+- `Transaction` - Optional individual income/expense entries
+- `Category` - Transaction categories with type (income/expense) and color
+
+For complete details, see [Monthly Data Model Documentation](docs/MONTHLY_DATA_MODEL.md).
+
+### Demo
+
+Run the demo script to see the monthly data model in action:
+
+```bash
+python scripts/demo_monthly_model.py
+```
+
 ## Architecture
 
 The application is organized into a modular structure:
@@ -26,6 +51,7 @@ llm-finance-assistant/
 │   ├── business_logic/    # Business logic layer
 │   │   ├── mcp.py         # FinanceMCP class (in-memory)
 │   │   ├── mcp_database.py # FinanceMCPDatabase class (PostgreSQL)
+│   │   ├── snapshot_service.py # SnapshotService for monthly model
 │   │   └── data.py        # Initial data setup
 │   ├── database/          # Database layer
 │   │   ├── models.py      # SQLAlchemy ORM models
@@ -43,7 +69,10 @@ llm-finance-assistant/
 │   ├── main_cli.py        # CLI entry point
 │   └── main_api.py        # API server entry point
 ├── scripts/               # Utility scripts
-│   └── seed_database.py   # Database seeding script
+│   ├── seed_database.py   # Database seeding script
+│   └── demo_monthly_model.py # Monthly model demonstration
+├── docs/                  # Documentation
+│   └── MONTHLY_DATA_MODEL.md # Monthly data model documentation
 ├── finance_assistant.py   # Original monolithic file (deprecated)
 └── README.md
 ```
