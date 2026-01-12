@@ -129,3 +129,15 @@ class FinanceMCP:
             added_transactions.append(new_transaction)
         
         return added_transactions
+    
+    def get_existing_categories(self) -> List[str]:
+        """Get a list of unique categories from existing transactions.
+        
+        Returns:
+            List of unique category names
+        """
+        categories = set()
+        for transaction in self.transactions:
+            if "category" in transaction and transaction["category"]:
+                categories.add(transaction["category"])
+        return sorted(list(categories))

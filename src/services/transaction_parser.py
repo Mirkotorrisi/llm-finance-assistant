@@ -1,10 +1,16 @@
 """Transaction parser service for converting extracted data to transactions."""
 
+import json
 import logging
+import os
 import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 
@@ -114,8 +120,102 @@ class TransactionParser:
         return "EUR"  # Default currency
     
     @staticmethod
-    def categorize_transaction(description: str, amount: float) -> str:
-        """Categorize transaction based on description and amount.
+    def categorize_transaction_with_llm(
+        description: str, 
+        amount: float, 
+        existing_categories: List[str],
+        openai_client: Optional[OpenAI] = None
+    ) -> str:
+        """Categorize transaction using LLM based on description, amount, and existing categories.
+        
+        This method uses an LLM to intelligently assign categories to transactions.
+        The LLM will either reuse an existing category or create a new one if appropriate.
+        
+        Args:
+            description: Transaction description
+            amount: Transaction amount (negative for expenses, positive for income)
+            existing_categories: List of existing category labels to consider
+            openai_client: Optional OpenAI client instance. If not provided, creates a new one.
+            
+        Returns:
+            Category name (either existing or newly created)
+        """
+        # Get or create OpenAI client
+        if openai_client is None:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                logger.warning("OPENAI_API_KEY not set, falling back to rule-based categorization")
+                return TransactionParser._categorize_transaction_fallback(description, amount)
+            openai_client = OpenAI(api_key=api_key)
+        
+        # Prepare the prompt for the LLM
+        transaction_type = "income" if amount > 0 else "expense"
+        
+        system_prompt = """You are a financial transaction categorization expert.
+Your job is to assign a category label to a transaction based on its description and amount.
+
+Rules:
+1. If the transaction clearly fits into one of the existing categories, use that category exactly as it appears.
+2. Only create a NEW category if the transaction doesn't fit well into any existing category.
+3. Category labels should be:
+   - Short (1-2 words)
+   - Descriptive and clear
+   - Lowercase
+   - Consistent with similar transactions
+4. Common categories include: food, transport, shopping, utilities, rent, income, entertainment, health, education, etc.
+
+Respond with ONLY a JSON object in this format:
+{
+  "category": "the_category_name",
+  "is_new": true/false,
+  "reasoning": "brief explanation of why this category was chosen"
+}"""
+
+        existing_categories_text = "None - this is the first transaction" if not existing_categories else ", ".join(existing_categories)
+        
+        user_prompt = f"""Transaction details:
+- Description: {description}
+- Amount: {amount}
+- Type: {transaction_type}
+
+Existing categories: {existing_categories_text}
+
+Please assign the most appropriate category for this transaction."""
+
+        try:
+            completion = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3
+            )
+            
+            response_text = completion.choices[0].message.content
+            response_data = json.loads(response_text)
+            
+            category = response_data.get("category", "other")
+            is_new = response_data.get("is_new", False)
+            reasoning = response_data.get("reasoning", "")
+            
+            if is_new:
+                logger.info(f"LLM created new category '{category}' for '{description}': {reasoning}")
+            else:
+                logger.debug(f"LLM assigned existing category '{category}' for '{description}'")
+            
+            return category.lower().strip()
+            
+        except Exception as e:
+            logger.warning(f"LLM categorization failed: {str(e)}, falling back to rule-based categorization")
+            return TransactionParser._categorize_transaction_fallback(description, amount)
+    
+    @staticmethod
+    def _categorize_transaction_fallback(description: str, amount: float) -> str:
+        """Fallback categorization using simple rules (used when LLM is unavailable).
+        
+        This is the original hardcoded categorization logic, kept as a fallback.
         
         Args:
             description: Transaction description
@@ -153,15 +253,42 @@ class TransactionParser:
         return "other"
     
     @staticmethod
-    def parse_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def categorize_transaction(description: str, amount: float) -> str:
+        """Categorize transaction based on description and amount.
+        
+        DEPRECATED: This method uses hardcoded rules. Use categorize_transaction_with_llm instead.
+        Kept for backward compatibility.
+        
+        Args:
+            description: Transaction description
+            amount: Transaction amount
+            
+        Returns:
+            Category name
+        """
+        return TransactionParser._categorize_transaction_fallback(description, amount)
+    
+    @staticmethod
+    def parse_row(
+        row: Dict[str, Any], 
+        existing_categories: Optional[List[str]] = None,
+        use_llm_categorization: bool = True,
+        openai_client: Optional[OpenAI] = None
+    ) -> Optional[Dict[str, Any]]:
         """Parse a single row into transaction format.
         
         Args:
             row: Raw data row
+            existing_categories: List of existing category labels (for LLM categorization)
+            use_llm_categorization: Whether to use LLM for categorization (default: True)
+            openai_client: Optional OpenAI client instance
             
         Returns:
             Transaction dictionary or None if parsing fails
         """
+        if existing_categories is None:
+            existing_categories = []
+            
         # Handle PDF raw text
         if "raw_text" in row:
             # Try to parse the raw text line
@@ -208,7 +335,14 @@ class TransactionParser:
                 description = "Transaction"
             
             currency = TransactionParser.extract_currency(text)
-            category = TransactionParser.categorize_transaction(description, amount)
+            
+            # Use LLM categorization if enabled
+            if use_llm_categorization:
+                category = TransactionParser.categorize_transaction_with_llm(
+                    description, amount, existing_categories, openai_client
+                )
+            else:
+                category = TransactionParser.categorize_transaction(description, amount)
             
             return {
                 "date": date,
@@ -278,7 +412,13 @@ class TransactionParser:
                     break
         
         if not category:
-            category = TransactionParser.categorize_transaction(description, amount)
+            # Use LLM categorization if enabled
+            if use_llm_categorization:
+                category = TransactionParser.categorize_transaction_with_llm(
+                    description, amount, existing_categories, openai_client
+                )
+            else:
+                category = TransactionParser.categorize_transaction(description, amount)
         
         return {
             "date": date,
@@ -289,22 +429,49 @@ class TransactionParser:
         }
     
     @staticmethod
-    def parse_transactions(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def parse_transactions(
+        rows: List[Dict[str, Any]], 
+        existing_categories: Optional[List[str]] = None,
+        use_llm_categorization: bool = True
+    ) -> List[Dict[str, Any]]:
         """Parse multiple rows into transactions.
         
         Args:
             rows: List of raw data rows
+            existing_categories: List of existing category labels (for LLM categorization)
+            use_llm_categorization: Whether to use LLM for categorization (default: True)
             
         Returns:
             List of parsed transactions
         """
+        if existing_categories is None:
+            existing_categories = []
+        
         transactions = []
+        
+        # Create a single OpenAI client to reuse across all transactions
+        openai_client = None
+        if use_llm_categorization:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if api_key:
+                try:
+                    openai_client = OpenAI(api_key=api_key)
+                except Exception as e:
+                    logger.warning(f"Failed to create OpenAI client: {str(e)}, will use fallback categorization")
         
         for i, row in enumerate(rows):
             try:
-                transaction = TransactionParser.parse_row(row)
+                transaction = TransactionParser.parse_row(
+                    row, 
+                    existing_categories=existing_categories,
+                    use_llm_categorization=use_llm_categorization,
+                    openai_client=openai_client
+                )
                 if transaction:
                     transactions.append(transaction)
+                    # Add new category to existing_categories for next iterations
+                    if transaction["category"] not in existing_categories:
+                        existing_categories.append(transaction["category"])
                 else:
                     logger.debug(f"Skipped row {i}: Could not parse")
             except Exception as e:

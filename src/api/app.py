@@ -187,8 +187,18 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
             logger.error(f"File validation error: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
         
-        # Parse transactions
-        transactions = TransactionParser.parse_transactions(extracted_data)
+        # Get existing categories from MCP server
+        mcp_server = get_mcp_server()
+        existing_categories = mcp_server.get_existing_categories()
+        
+        logger.info(f"Found {len(existing_categories)} existing categories: {existing_categories}")
+        
+        # Parse transactions with LLM-based categorization
+        transactions = TransactionParser.parse_transactions(
+            extracted_data,
+            existing_categories=existing_categories,
+            use_llm_categorization=True
+        )
         
         if not transactions:
             return UploadStatementResponse(
@@ -201,7 +211,6 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
             )
         
         # Remove duplicates
-        mcp_server = get_mcp_server()
         existing_transactions = mcp_server.list_transactions()
         unique_transactions = TransactionParser.remove_duplicates(transactions, existing_transactions)
         
