@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
 
-from src.database.models import Transaction, Category
+from src.database.models import Transaction, Category, Account, MonthlyAccountSnapshot
 from src.database.init import get_db_session
 
 
@@ -218,3 +218,33 @@ class FinanceMCPDatabase:
                 self.db.rollback()
                 # Log but don't fail - category creation is not critical
                 print(f"Warning: Failed to create category '{category_name}': {e}")
+    
+    def get_monthly_snapshots(self, year: int) -> List[dict]:
+        """Get all monthly account snapshots for a given year.
+        
+        Args:
+            year: Year to fetch snapshots for (YYYY)
+            
+        Returns:
+            List of monthly snapshots as dictionaries
+        """
+        snapshots = self.db.query(MonthlyAccountSnapshot).filter(
+            MonthlyAccountSnapshot.year == year
+        ).order_by(
+            MonthlyAccountSnapshot.month,
+            MonthlyAccountSnapshot.account_id
+        ).all()
+        
+        return [snapshot.to_dict() for snapshot in snapshots]
+    
+    def get_accounts(self) -> List[dict]:
+        """Get all active accounts.
+        
+        Returns:
+            List of active accounts as dictionaries
+        """
+        accounts = self.db.query(Account).filter(
+            Account.is_active
+        ).order_by(Account.name).all()
+        
+        return [account.to_dict() for account in accounts]

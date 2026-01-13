@@ -141,3 +141,26 @@ class FinanceMCP:
             if "category" in transaction and transaction["category"]:
                 categories.add(transaction["category"])
         return sorted(list(categories))
+    
+    def get_monthly_snapshots(self, year: int) -> List[dict]:
+        """Get all monthly account snapshots for a given year.
+        
+        Note: In-memory implementation returns empty list as snapshots are not supported.
+        
+        Args:
+            year: Year to fetch snapshots for (YYYY)
+            
+        Returns:
+            Empty list (in-memory implementation doesn't support snapshots)
+        """
+        return []
+    
+    def get_accounts(self) -> List[dict]:
+        """Get all active accounts.
+        
+        Note: In-memory implementation returns empty list as accounts are not supported.
+        
+        Returns:
+            Empty list (in-memory implementation doesn't support accounts)
+        """
+        return []

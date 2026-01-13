@@ -123,3 +123,85 @@ def test_categorization():
     assert any(t["category"] == "transport" for t in transactions)
     assert any(t["category"] == "shopping" for t in transactions)
     assert any(t["category"] == "income" for t in transactions)
+
+
+def test_financial_data_endpoint():
+    """Test the financial data endpoint."""
+    
+    # Test with a year (2026)
+    response = client.get("/api/financial-data/2026")
+    assert response.status_code == 200
+    
+    data = response.json()
+    
+    # Verify response structure
+    assert "year" in data
+    assert "currentNetWorth" in data
+    assert "netSavings" in data
+    assert "monthlyData" in data
+    assert "accountBreakdown" in data
+    
+    # Verify year
+    assert data["year"] == 2026
+    
+    # Verify monthlyData structure
+    assert isinstance(data["monthlyData"], list)
+    assert len(data["monthlyData"]) == 12  # Should have 12 months
+    
+    # Check first month structure
+    if data["monthlyData"]:
+        first_month = data["monthlyData"][0]
+        assert "month" in first_month
+        assert "netWorth" in first_month
+        assert "expenses" in first_month
+        assert "income" in first_month
+        assert "net" in first_month
+        assert first_month["month"] == "Jan"
+    
+    # Verify accountBreakdown structure
+    assert "liquidity" in data["accountBreakdown"]
+    assert "investments" in data["accountBreakdown"]
+    assert "otherAssets" in data["accountBreakdown"]
+
+
+def test_financial_data_endpoint_year_with_no_data():
+    """Test financial data endpoint with a year that has no data."""
+    
+    # Test with a year that likely has no data (e.g., 2050)
+    response = client.get("/api/financial-data/2050")
+    assert response.status_code == 200
+    
+    data = response.json()
+    
+    # Verify response structure even with no data
+    assert data["year"] == 2050
+    assert data["currentNetWorth"] == 0.0
+    assert data["netSavings"] == 0.0
+    assert len(data["monthlyData"]) == 12
+    
+    # All months should have zero values
+    for month_data in data["monthlyData"]:
+        assert month_data["netWorth"] == 0.0
+        assert month_data["expenses"] == 0.0
+        assert month_data["income"] == 0.0
+        assert month_data["net"] == 0.0
+    
+    # Account breakdown should be all zeros
+    assert data["accountBreakdown"]["liquidity"] == 0.0
+    assert data["accountBreakdown"]["investments"] == 0.0
+    assert data["accountBreakdown"]["otherAssets"] == 0.0
+
+
+def test_financial_data_endpoint_month_names():
+    """Test that month names are properly formatted."""
+    
+    response = client.get("/api/financial-data/2026")
+    assert response.status_code == 200
+    
+    data = response.json()
+    monthly_data = data["monthlyData"]
+    
+    expected_months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    actual_months = [m["month"] for m in monthly_data]
+    
+    assert actual_months == expected_months

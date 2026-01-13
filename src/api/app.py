@@ -7,7 +7,7 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
-from typing import Union
+from typing import Union, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -110,6 +110,31 @@ class UploadStatementResponse(BaseModel):
     transactions: list
 
 
+class MonthlyDataResponse(BaseModel):
+    """Response model for monthly data in financial data endpoint."""
+    month: str  # "Jan", "Feb", etc.
+    netWorth: float
+    expenses: float
+    income: float
+    net: float
+
+
+class AccountBreakdownResponse(BaseModel):
+    """Response model for account breakdown in financial data endpoint."""
+    liquidity: float
+    investments: float
+    otherAssets: float
+
+
+class FinancialDataResponse(BaseModel):
+    """Response model for financial data endpoint."""
+    year: int
+    currentNetWorth: float
+    netSavings: float
+    monthlyData: List[MonthlyDataResponse]
+    accountBreakdown: AccountBreakdownResponse
+
+
 @app.get("/")
 async def root():
     """Root endpoint."""
@@ -122,7 +147,8 @@ async def root():
             "websocket": "/ws/chat (WebSocket)",
             "transactions": "/api/transactions (GET)",
             "balance": "/api/balance (GET)",
-            "upload_statement": "/statements/upload (POST)"
+            "upload_statement": "/statements/upload (POST)",
+            "financial_data": "/api/financial-data/{year} (GET)"
         }
     }
 
@@ -151,6 +177,130 @@ async def get_balance():
     mcp_server = get_mcp_server()
     balance = mcp_server.get_balance()
     return {"balance": balance}
+
+
+@app.get("/api/financial-data/{year}")
+async def get_financial_data(year: int) -> FinancialDataResponse:
+    """Get aggregated financial data for a specific year.
+    
+    Args:
+        year: Year to fetch financial data for (YYYY)
+        
+    Returns:
+        Aggregated financial data including monthly breakdown and account breakdown
+        
+    Raises:
+        HTTPException: If there's an error fetching the data
+    """
+    try:
+        mcp_server = get_mcp_server()
+        
+        # Fetch monthly snapshots for the year
+        snapshots = mcp_server.get_monthly_snapshots(year)
+        
+        # Fetch all active accounts
+        accounts = mcp_server.get_accounts()
+        
+        # Create a map of account_id to account type for quick lookup
+        account_type_map = {acc['id']: acc['type'] for acc in accounts}
+        
+        # Initialize monthly data structure for all 12 months
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        monthly_data_map = {
+            month: {
+                "month": month_names[month - 1],
+                "netWorth": 0.0,
+                "expenses": 0.0,
+                "income": 0.0,
+                "net": 0.0,
+                "has_data": False  # Track if month has any snapshots
+            }
+            for month in range(1, 13)
+        }
+        
+        # Aggregate data by month
+        for snapshot in snapshots:
+            month = snapshot['month']
+            if month in monthly_data_map:
+                monthly_data_map[month]["netWorth"] += snapshot['ending_balance']
+                monthly_data_map[month]["expenses"] += snapshot['total_expense']
+                monthly_data_map[month]["income"] += snapshot['total_income']
+                monthly_data_map[month]["has_data"] = True
+        
+        # Calculate net for each month after aggregation
+        for month in range(1, 13):
+            monthly_data_map[month]["net"] = (
+                monthly_data_map[month]["income"] - monthly_data_map[month]["expenses"]
+            )
+        
+        # Convert to list of MonthlyDataResponse
+        monthly_data = [
+            MonthlyDataResponse(
+                month=monthly_data_map[month]["month"],
+                netWorth=monthly_data_map[month]["netWorth"],
+                expenses=monthly_data_map[month]["expenses"],
+                income=monthly_data_map[month]["income"],
+                net=monthly_data_map[month]["net"]
+            )
+            for month in range(1, 13)
+        ]
+        
+        # Calculate current net worth (latest month with data)
+        current_net_worth = 0.0
+        for month in range(12, 0, -1):
+            if monthly_data_map[month]["has_data"]:
+                current_net_worth = monthly_data_map[month]["netWorth"]
+                break
+        
+        # Calculate net savings (sum of all net values)
+        net_savings = sum(md.net for md in monthly_data)
+        
+        # Calculate account breakdown
+        # Get the latest snapshots for each account
+        account_latest_balances = {}
+        for snapshot in snapshots:
+            account_id = snapshot['account_id']
+            month = snapshot['month']
+            # Keep track of the latest balance for each account
+            if account_id not in account_latest_balances or account_latest_balances[account_id]['month'] < month:
+                account_latest_balances[account_id] = {
+                    'month': month,
+                    'balance': snapshot['ending_balance']
+                }
+        
+        # Categorize accounts by type
+        liquidity = 0.0
+        investments = 0.0
+        other_assets = 0.0
+        
+        for account_id, data in account_latest_balances.items():
+            account_type = account_type_map.get(account_id, "").lower()
+            balance = data['balance']
+            
+            if account_type in ["checking", "savings", "cash"]:
+                liquidity += balance
+            elif account_type == "investment":
+                investments += balance
+            else:
+                other_assets += balance
+        
+        account_breakdown = AccountBreakdownResponse(
+            liquidity=liquidity,
+            investments=investments,
+            otherAssets=other_assets
+        )
+        
+        return FinancialDataResponse(
+            year=year,
+            currentNetWorth=current_net_worth,
+            netSavings=net_savings,
+            monthlyData=monthly_data,
+            accountBreakdown=account_breakdown
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching financial data for year {year}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching financial data: {str(e)}")
 
 
 @app.post("/statements/upload")

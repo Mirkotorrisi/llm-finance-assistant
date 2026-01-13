@@ -60,6 +60,18 @@ class TestDatabaseMCPInterface:
         mcp, _ = mcp_database
         assert hasattr(mcp, 'get_existing_categories')
         assert callable(mcp.get_existing_categories)
+    
+    def test_has_get_monthly_snapshots_method(self, mcp_database):
+        """Test that get_monthly_snapshots method exists."""
+        mcp, _ = mcp_database
+        assert hasattr(mcp, 'get_monthly_snapshots')
+        assert callable(mcp.get_monthly_snapshots)
+    
+    def test_has_get_accounts_method(self, mcp_database):
+        """Test that get_accounts method exists."""
+        mcp, _ = mcp_database
+        assert hasattr(mcp, 'get_accounts')
+        assert callable(mcp.get_accounts)
 
 
 class TestDatabaseMCPCompatibility:
