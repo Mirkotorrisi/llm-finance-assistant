@@ -10,9 +10,11 @@ from contextlib import contextmanager
 from typing import Union
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from src.models import Action, FinancialParameters, UserInput
+from src.models import Action, FinancialParameters, UserInput, LLMNLUResponse
 from src.workflow import create_assistant_graph, get_mcp_server
 from src.workflow.state import FinanceState
 from src.services import FileProcessor, FileValidationError, TransactionParser, VectorizationService
@@ -85,6 +87,28 @@ app.add_middleware(
 )
 
 
+class RootResponse(BaseModel):
+    """Response model for root endpoint."""
+    message: str
+    version: str
+    endpoints: dict
+
+
+class HealthResponse(BaseModel):
+    """Response model for health check endpoint."""
+    status: str
+
+
+class TransactionsResponse(BaseModel):
+    """Response model for transactions endpoint."""
+    transactions: list
+
+
+class BalanceResponse(BaseModel):
+    """Response model for balance endpoint."""
+    balance: float
+
+
 class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
     message: str
@@ -110,13 +134,13 @@ class UploadStatementResponse(BaseModel):
     transactions: list
 
 
-@app.get("/")
-async def root():
+@app.get("/", response_model=RootResponse, tags=["health"])
+async def root() -> RootResponse:
     """Root endpoint."""
-    return {
-        "message": "Finance Assistant API",
-        "version": "1.0.0",
-        "endpoints": {
+    return RootResponse(
+        message="Finance Assistant API",
+        version="1.0.0",
+        endpoints={
             "health": "/health",
             "chat": "/api/chat (POST)",
             "websocket": "/ws/chat (WebSocket)",
@@ -124,36 +148,36 @@ async def root():
             "balance": "/api/balance (GET)",
             "upload_statement": "/statements/upload (POST)"
         }
-    }
+    )
 
 
-@app.get("/health")
-async def health():
+@app.get("/health", response_model=HealthResponse, tags=["health"])
+async def health() -> HealthResponse:
     """Health check endpoint."""
-    return {"status": "healthy"}
+    return HealthResponse(status="healthy")
 
 
-@app.get("/api/transactions")
+@app.get("/api/transactions", response_model=TransactionsResponse, tags=["transactions"])
 async def get_transactions(
     category: Union[str, None] = None,
     start_date: Union[str, None] = None,
     end_date: Union[str, None] = None
-):
+) -> TransactionsResponse:
     """Get transactions with optional filters."""
     mcp_server = get_mcp_server()
     transactions = mcp_server.list_transactions(category, start_date, end_date)
-    return {"transactions": transactions}
+    return TransactionsResponse(transactions=transactions)
 
 
-@app.get("/api/balance")
-async def get_balance():
+@app.get("/api/balance", response_model=BalanceResponse, tags=["transactions"])
+async def get_balance() -> BalanceResponse:
     """Get current balance."""
     mcp_server = get_mcp_server()
     balance = mcp_server.get_balance()
-    return {"balance": balance}
+    return BalanceResponse(balance=balance)
 
 
-@app.post("/statements/upload")
+@app.post("/statements/upload", response_model=UploadStatementResponse, tags=["statements"])
 async def upload_statement(file: UploadFile = File(...)) -> UploadStatementResponse:
     """Upload and process a bank statement file.
     
@@ -247,7 +271,7 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
 
-@app.post("/api/chat")
+@app.post("/api/chat", response_model=ChatResponse, tags=["chat"])
 async def chat(request: ChatRequest) -> ChatResponse:
     """Process a chat request (text or audio).
     
@@ -402,3 +426,19 @@ async def websocket_chat(websocket: WebSocket):
                 
     except WebSocketDisconnect:
         print("WebSocket client disconnected")
+
+
+@app.get("/api/openapi.json", include_in_schema=False)
+async def get_openapi_schema():
+    """Serve the OpenAPI schema JSON (required by Swagger UI)."""
+    return JSONResponse(content=app.openapi())
+
+
+@app.get("/api/swagger", include_in_schema=False)
+async def get_swagger_ui():
+    """Serve the Swagger UI documentation at /api/swagger."""
+    return get_swagger_ui_html(
+        openapi_url="/api/openapi.json",
+        title=f"{app.title} - Swagger UI",
+        swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png"
+    )
