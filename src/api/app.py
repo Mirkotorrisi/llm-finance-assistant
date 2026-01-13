@@ -87,6 +87,51 @@ app.add_middleware(
 )
 
 
+def custom_openapi():
+    """Custom OpenAPI schema that includes all domain models."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    # Import the default openapi utility
+    from fastapi.openapi.utils import get_openapi
+    
+    # Generate the base OpenAPI schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    
+    # Ensure domain models are included in the schema
+    if "components" not in openapi_schema:
+        openapi_schema["components"] = {}
+    if "schemas" not in openapi_schema["components"]:
+        openapi_schema["components"]["schemas"] = {}
+    
+    # Add domain models explicitly
+    from pydantic import TypeAdapter
+    
+    # Add Action enum
+    action_adapter = TypeAdapter(Action)
+    openapi_schema["components"]["schemas"]["Action"] = action_adapter.json_schema()
+    
+    # Add FinancialParameters
+    openapi_schema["components"]["schemas"]["FinancialParameters"] = FinancialParameters.model_json_schema()
+    
+    # Add UserInput
+    openapi_schema["components"]["schemas"]["UserInput"] = UserInput.model_json_schema()
+    
+    # Add LLMNLUResponse
+    openapi_schema["components"]["schemas"]["LLMNLUResponse"] = LLMNLUResponse.model_json_schema()
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
+
 class RootResponse(BaseModel):
     """Response model for root endpoint."""
     message: str
