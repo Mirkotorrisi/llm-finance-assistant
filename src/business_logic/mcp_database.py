@@ -244,7 +244,7 @@ class FinanceMCPDatabase:
             List of active accounts as dictionaries
         """
         accounts = self.db.query(Account).filter(
-            Account.is_active == True
+            Account.is_active
         ).order_by(Account.name).all()
         
         return [account.to_dict() for account in accounts]
