@@ -212,7 +212,8 @@ async def get_financial_data(year: int) -> FinancialDataResponse:
                 "netWorth": 0.0,
                 "expenses": 0.0,
                 "income": 0.0,
-                "net": 0.0
+                "net": 0.0,
+                "has_data": False  # Track if month has any snapshots
             }
             for month in range(1, 13)
         }
@@ -224,20 +225,30 @@ async def get_financial_data(year: int) -> FinancialDataResponse:
                 monthly_data_map[month]["netWorth"] += snapshot['ending_balance']
                 monthly_data_map[month]["expenses"] += snapshot['total_expense']
                 monthly_data_map[month]["income"] += snapshot['total_income']
-                monthly_data_map[month]["net"] = (
-                    monthly_data_map[month]["income"] - monthly_data_map[month]["expenses"]
-                )
+                monthly_data_map[month]["has_data"] = True
+        
+        # Calculate net for each month after aggregation
+        for month in range(1, 13):
+            monthly_data_map[month]["net"] = (
+                monthly_data_map[month]["income"] - monthly_data_map[month]["expenses"]
+            )
         
         # Convert to list of MonthlyDataResponse
         monthly_data = [
-            MonthlyDataResponse(**monthly_data_map[month])
+            MonthlyDataResponse(
+                month=monthly_data_map[month]["month"],
+                netWorth=monthly_data_map[month]["netWorth"],
+                expenses=monthly_data_map[month]["expenses"],
+                income=monthly_data_map[month]["income"],
+                net=monthly_data_map[month]["net"]
+            )
             for month in range(1, 13)
         ]
         
         # Calculate current net worth (latest month with data)
         current_net_worth = 0.0
         for month in range(12, 0, -1):
-            if monthly_data_map[month]["netWorth"] > 0:
+            if monthly_data_map[month]["has_data"]:
                 current_net_worth = monthly_data_map[month]["netWorth"]
                 break
         
