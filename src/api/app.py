@@ -7,7 +7,7 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
-from typing import Union, List
+from typing import Union, List, Dict, Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from src.models import Action, FinancialParameters, UserInput
 from src.workflow import create_assistant_graph, get_mcp_server
 from src.workflow.state import FinanceState
-from src.services import FileProcessor, FileValidationError, TransactionParser, VectorizationService
+from src.services import FileProcessor, FileValidationError, TransactionParser, RAGService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -84,6 +84,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize global RAG service for transaction semantic search
+rag_service = RAGService()
+logger.info("RAG service initialized")
+
 
 class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
@@ -146,6 +150,7 @@ async def root():
             "chat": "/api/chat (POST)",
             "websocket": "/ws/chat (WebSocket)",
             "transactions": "/api/transactions (GET)",
+            "search_transactions": "/api/transactions/search (POST) - RAG semantic search",
             "balance": "/api/balance (GET)",
             "upload_statement": "/statements/upload (POST)",
             "financial_data": "/api/financial-data/{year} (GET)"
@@ -367,14 +372,12 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
         # Add transactions to the system
         added_transactions = mcp_server.add_transactions_bulk(unique_transactions)
         
-        # Process for vectorization (optional - don't fail if it errors)
-        # TODO: Consider moving this to an async background task for better performance
+        # Add to RAG vector store for semantic search
         try:
-            vectorization_service = VectorizationService()
-            vectorization_service.process_transactions(unique_transactions)
-            logger.info("Transactions vectorized successfully")
+            rag_service.add_transactions(added_transactions)
+            logger.info(f"Added {len(added_transactions)} transactions to RAG vector store")
         except Exception as e:
-            logger.warning(f"Vectorization failed (non-critical): {str(e)}")
+            logger.warning(f"Failed to add transactions to RAG store (non-critical): {str(e)}")
         
         logger.info(
             f"Statement upload completed: {len(added_transactions)} transactions added, "
@@ -395,6 +398,43 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
     except Exception as e:
         logger.error(f"Unexpected error processing file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+
+class RAGQueryRequest(BaseModel):
+    """Request model for RAG query endpoint."""
+    query: str
+    top_k: int = 5
+
+
+class RAGQueryResponse(BaseModel):
+    """Response model for RAG query endpoint."""
+    query: str
+    results: List[Dict[str, Any]]
+    total_in_store: int
+
+
+@app.post("/api/transactions/search")
+async def search_transactions(request: RAGQueryRequest) -> RAGQueryResponse:
+    """Search transactions using semantic similarity (RAG).
+    
+    Args:
+        request: Query request with natural language query
+        
+    Returns:
+        List of most relevant transactions with similarity scores
+    """
+    try:
+        results = rag_service.query(request.query, top_k=request.top_k)
+        
+        return RAGQueryResponse(
+            query=request.query,
+            results=results,
+            total_in_store=rag_service.size()
+        )
+        
+    except Exception as e:
+        logger.error(f"Error searching transactions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error searching transactions: {str(e)}")
 
 
 @app.post("/api/chat")

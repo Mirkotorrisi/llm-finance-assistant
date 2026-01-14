@@ -211,13 +211,14 @@ Once the server is running, visit:
    Supported file formats:
    - **CSV**: Expects columns for date, description, amount (optionally currency, category)
    - **Excel (XLS/XLSX)**: Expects columns for date, description, amount (optionally currency, category)
-   - **PDF**: Extracts text and attempts to parse transactions
+   - **PDF**: Uses LLM (GPT-4o-mini) to intelligently extract and parse transactions from unstructured text
    
    Features:
-   - Automatic duplicate detection (skips already existing transactions)
-   - Automatic categorization based on transaction descriptions
-   - Currency support (extracts from data or defaults to EUR)
-   - Transaction chunking and vectorization (requires OPENAI_API_KEY)
+   - **LLM-based PDF parsing**: Intelligently extracts transactions from bank statement PDFs using OpenAI
+   - **Automatic duplicate detection**: Skips already existing transactions
+   - **Smart categorization**: Uses LLM to assign appropriate categories to transactions
+   - **Currency support**: Extracts from data or defaults to EUR
+   - **RAG integration**: Transactions are automatically added to vector store for semantic search
    
    Example response:
    ```json
@@ -231,7 +232,35 @@ Once the server is running, visit:
    }
    ```
 
-5. **Chat (REST)**
+5. **Search Transactions (RAG)**
+   ```
+   POST /api/transactions/search
+   Content-Type: application/json
+   
+   {
+     "query": "food and grocery expenses last month",
+     "top_k": 5
+   }
+   ```
+   
+   Uses semantic search (RAG) to find transactions matching natural language queries.
+   
+   Example response:
+   ```json
+   {
+     "query": "food and grocery expenses last month",
+     "results": [
+       {
+         "transaction": {"date": "2026-01-15", "description": "Walmart grocery", ...},
+         "text": "Date: 2026-01-15, Description: Walmart grocery, ...",
+         "similarity": 0.89
+       }
+     ],
+     "total_in_store": 150
+   }
+   ```
+
+6. **Chat (REST)**
    ```
    POST /api/chat
    Content-Type: application/json
@@ -242,7 +271,7 @@ Once the server is running, visit:
    }
    ```
 
-5. **Chat with Audio (REST)**
+7. **Chat with Audio (REST)**
    ```
    POST /api/chat
    Content-Type: application/json
@@ -407,10 +436,10 @@ print(params.model_dump())
 - **workflow/**: Contains the LangGraph-based agentic workflow with ASR, NLU, query execution, and response generation nodes
 - **models/**: Shared Pydantic models for type safety and validation
 - **api/**: FastAPI application with REST and WebSocket endpoints
-- **services/**: File processing, transaction parsing, and vectorization services
+- **services/**: File processing, transaction parsing, and RAG services
   - `file_processor.py`: Validates and extracts data from PDF, Excel, and CSV files
-  - `transaction_parser.py`: Parses extracted data into standardized transaction format
-  - `vectorization.py`: Chunks transactions and generates embeddings for LLM queries
+  - `transaction_parser.py`: Parses extracted data using LLM for intelligent categorization and PDF extraction
+  - `vectorization.py`: RAG service with in-memory vector store for semantic transaction search
 
 ### Database Persistence
 
@@ -478,7 +507,8 @@ Both provide the same interface:
 
 FastAPI application with:
 - REST endpoints for direct access to transactions and balance
-- POST endpoint for uploading and processing bank statements (PDF, Excel, CSV)
+- POST endpoint for uploading and processing bank statements (PDF, Excel, CSV) with LLM-based parsing
+- POST endpoint for semantic transaction search using RAG
 - POST endpoint for processing chat requests
 - WebSocket endpoint for real-time bidirectional communication
 - Support for both text and audio inputs (base64-encoded)
@@ -487,8 +517,8 @@ FastAPI application with:
 
 The services module handles bank statement uploads:
 - **FileProcessor**: Validates file formats/sizes and extracts raw data from PDF, Excel, and CSV files
-- **TransactionParser**: Converts extracted data into standardized transaction format with automatic categorization
-- **VectorizationService**: Creates embeddings for transactions to enable semantic search with LLMs
+- **TransactionParser**: Uses LLM (GPT-4o-mini) to intelligently parse PDFs and categorize transactions
+- **RAGService**: In-memory vector store for semantic transaction search using embeddings
 
 ## Contributing
 
@@ -498,7 +528,8 @@ The modular structure makes it easy to:
 - Extend API endpoints in `api/app.py`
 - Add new models in `models/domain.py`
 - Add new file format support in `services/file_processor.py`
-- Improve transaction parsing in `services/transaction_parser.py`
+- Improve LLM-based parsing in `services/transaction_parser.py`
+- Enhance RAG search capabilities in `services/vectorization.py`
 
 ## License
 

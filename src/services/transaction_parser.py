@@ -20,6 +20,9 @@ class TransactionParser:
     # Maximum description length for LLM categorization to prevent prompt injection
     MAX_DESCRIPTION_LENGTH = 500
     
+    # Maximum PDF text length for LLM parsing to prevent token overflow
+    MAX_PDF_TEXT_LENGTH = 10000
+    
     @staticmethod
     def _get_openai_client() -> Optional[OpenAI]:
         """Get or create OpenAI client.
@@ -306,6 +309,120 @@ Please assign the most appropriate category for this transaction."""
         return TransactionParser._categorize_transaction_fallback(description, amount)
     
     @staticmethod
+    def parse_pdf_with_llm(
+        pdf_text: str,
+        existing_categories: Optional[List[str]] = None,
+        openai_client: Optional[OpenAI] = None
+    ) -> List[Dict[str, Any]]:
+        """Parse PDF text using LLM to extract transaction data.
+        
+        Args:
+            pdf_text: Full text content from PDF
+            existing_categories: List of existing category labels
+            openai_client: Optional OpenAI client instance
+            
+        Returns:
+            List of parsed transactions
+        """
+        if existing_categories is None:
+            existing_categories = []
+        
+        # Get or create OpenAI client
+        if openai_client is None:
+            openai_client = TransactionParser._get_openai_client()
+            if openai_client is None:
+                logger.error("OPENAI_API_KEY not set or client creation failed, cannot parse PDF with LLM")
+                return []
+        
+        system_prompt = """You are a financial document parsing expert.
+Your job is to extract transaction data from bank statement text.
+
+Extract the following information for each transaction:
+1. Date (in ISO format YYYY-MM-DD)
+2. Description (what the transaction was for)
+3. Amount (positive for income/credits, negative for expenses/debits)
+4. Currency (USD, EUR, GBP, etc.)
+5. Category (use existing categories when appropriate, or create new ones)
+
+Rules:
+- Only extract clear, identifiable transactions
+- Convert all dates to ISO format (YYYY-MM-DD)
+- Use negative amounts for expenses/debits and positive for income/credits
+- Choose descriptive categories (e.g., "food", "transport", "shopping", "utilities", "income")
+- If currency is not specified, default to EUR
+
+Respond with ONLY a JSON object with this structure:
+{
+  "transactions": [
+    {
+      "date": "YYYY-MM-DD",
+      "description": "transaction description",
+      "amount": -50.00,
+      "currency": "EUR",
+      "category": "food"
+    }
+  ]
+}
+
+If no transactions can be extracted, return: {"transactions": []}"""
+
+        existing_categories_text = "None - create appropriate categories" if not existing_categories else ", ".join(existing_categories)
+        
+        # Limit PDF text to prevent token overflow
+        truncated_text = pdf_text[:TransactionParser.MAX_PDF_TEXT_LENGTH] if len(pdf_text) > TransactionParser.MAX_PDF_TEXT_LENGTH else pdf_text
+        
+        user_prompt = f"""Please extract all financial transactions from this bank statement:
+
+{truncated_text}
+
+Existing categories in the system: {existing_categories_text}
+
+Extract all transactions and format them as specified."""
+
+        try:
+            completion = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.1  # Low temperature for consistent extraction
+            )
+            
+            # Validate response
+            if not completion.choices or len(completion.choices) == 0:
+                raise ValueError("API response contains no choices")
+            
+            response_text = completion.choices[0].message.content
+            if not response_text:
+                raise ValueError("API response content is empty")
+            
+            response_data = json.loads(response_text)
+            transactions = response_data.get("transactions", [])
+            
+            logger.info(f"LLM extracted {len(transactions)} transactions from PDF")
+            
+            # Validate and clean extracted transactions
+            valid_transactions = []
+            for txn in transactions:
+                if all(k in txn for k in ["date", "description", "amount", "category"]):
+                    # Ensure proper types
+                    try:
+                        txn["amount"] = float(txn["amount"])
+                        txn["currency"] = txn.get("currency", "EUR")
+                        valid_transactions.append(txn)
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Skipping invalid transaction: {e}")
+                        continue
+            
+            return valid_transactions
+            
+        except Exception as e:
+            logger.error(f"LLM-based PDF parsing failed: {str(e)}")
+            return []
+    
+    @staticmethod
     def parse_row(
         row: Dict[str, Any], 
         existing_categories: Optional[List[str]] = None,
@@ -326,68 +443,11 @@ Please assign the most appropriate category for this transaction."""
         if existing_categories is None:
             existing_categories = []
             
-        # Handle PDF raw text
-        if "raw_text" in row:
-            # Try to parse the raw text line
-            # This is a simplified parser - in production, you'd use more sophisticated NLP
-            text = row["raw_text"]
-            
-            # Try to find date pattern
-            date_match = re.search(r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b', text)
-            if not date_match:
-                return None
-            
-            date_str = date_match.group()
-            date = TransactionParser.parse_date(date_str)
-            
-            # Try to find amount pattern
-            amount_match = re.search(r'[-+]?\$?\€?\£?[\d,]+\.?\d*', text)
-            if not amount_match:
-                return None
-            
-            amount_str = amount_match.group()
-            amount = TransactionParser.parse_amount(amount_str)
-            if amount is None:
-                return None
-            
-            # Description is the text with date and amount removed (use their positions)
-            parts = []
-            last_end = 0
-            
-            # Remove date part
-            if date_match:
-                parts.append(text[last_end:date_match.start()])
-                last_end = date_match.end()
-            
-            # Add middle part (before amount)
-            if amount_match:
-                parts.append(text[last_end:amount_match.start()])
-                last_end = amount_match.end()
-            
-            # Add remaining part
-            parts.append(text[last_end:])
-            
-            description = ' '.join(parts).strip()
-            if not description:
-                description = "Transaction"
-            
-            currency = TransactionParser.extract_currency(text)
-            
-            # Use LLM categorization if enabled
-            if use_llm_categorization:
-                category = TransactionParser.categorize_transaction_with_llm(
-                    description, amount, existing_categories, openai_client
-                )
-            else:
-                category = TransactionParser.categorize_transaction(description, amount)
-            
-            return {
-                "date": date,
-                "description": description,
-                "amount": amount,
-                "currency": currency,
-                "category": category
-            }
+        # Handle PDF text - this should now be handled by parse_pdf_with_llm
+        if "pdf_text" in row:
+            # This is now handled by parse_pdf_with_llm instead
+            logger.debug("PDF text detected, should be parsed with parse_pdf_with_llm")
+            return None
         
         # Handle structured data (CSV/Excel)
         # Try to find date, description, and amount fields with various common names
@@ -483,6 +543,16 @@ Please assign the most appropriate category for this transaction."""
         """
         if existing_categories is None:
             existing_categories = []
+        
+        # Check if this is PDF content (single row with pdf_text key)
+        if len(rows) == 1 and "pdf_text" in rows[0]:
+            logger.info("Detected PDF content, using LLM-based parsing")
+            openai_client = TransactionParser._get_openai_client()
+            return TransactionParser.parse_pdf_with_llm(
+                rows[0]["pdf_text"],
+                existing_categories=existing_categories,
+                openai_client=openai_client
+            )
         
         transactions = []
         

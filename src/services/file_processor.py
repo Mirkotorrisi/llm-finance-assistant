@@ -53,13 +53,13 @@ class FileProcessor:
     
     @staticmethod
     def extract_from_pdf(file_content: BinaryIO) -> List[Dict[str, Any]]:
-        """Extract text and tables from PDF file.
+        """Extract full text from PDF file for LLM-based parsing.
         
         Args:
             file_content: Binary content of the PDF file
             
         Returns:
-            List of extracted data rows (as dictionaries)
+            List containing a single dict with the full PDF text
         """
         try:
             pdf_reader = PdfReader(file_content)
@@ -71,14 +71,13 @@ class FileProcessor:
                 if text:
                     all_text.append(text)
             
-            # Join all text and split into lines
+            # Join all text
             full_text = "\n".join(all_text)
-            lines = [line.strip() for line in full_text.split("\n") if line.strip()]
             
-            logger.info(f"Extracted {len(lines)} lines from PDF")
+            logger.info(f"Extracted {len(full_text)} characters from PDF")
             
-            # Return raw lines for parsing
-            return [{"raw_text": line} for line in lines]
+            # Return full text for LLM-based parsing
+            return [{"pdf_text": full_text}]
             
         except Exception as e:
             logger.error(f"Error extracting PDF content: {str(e)}")
