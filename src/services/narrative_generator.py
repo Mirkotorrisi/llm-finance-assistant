@@ -13,6 +13,9 @@ from src.services.aggregation_service import AggregationService
 
 logger = logging.getLogger(__name__)
 
+# Threshold for category summary generation (in EUR)
+MIN_CATEGORY_AMOUNT = 100.0
+
 
 class NarrativeGenerator:
     """Service for generating narrative financial summaries.
@@ -297,7 +300,7 @@ class NarrativeGenerator:
             
             # Only generate for expense categories with meaningful spending
             for cat_data in categories:
-                if cat_data["total"] < 0 and abs(cat_data["total"]) > 100:  # Threshold: €100
+                if cat_data["total"] < 0 and abs(cat_data["total"]) > MIN_CATEGORY_AMOUNT:
                     doc = self.generate_category_summary(year, cat_data["category"])
                     if doc:
                         documents.append(doc)

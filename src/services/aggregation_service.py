@@ -247,28 +247,38 @@ class AggregationService:
             # Get current month category totals
             current_categories = self.get_category_aggregates(year, month)
             
-            # Get historical averages (previous 6 months)
+            # Get historical averages (previous 6 months, including previous year if needed)
             historical_averages = {}
             
             for cat_data in current_categories:
                 category = cat_data["category"]
                 
-                # Query historical data (up to 6 months prior)
+                # Calculate date range for historical data (6 months back)
+                from datetime import datetime, timedelta
+                current_date = datetime(year, month, 1)
+                six_months_ago = current_date - timedelta(days=180)
+                
+                # Query historical data (up to 6 months prior, may span years)
                 historical = self.db.query(
                     func.avg(
                         func.sum(Transaction.amount)
                     ).label('avg_amount')
                 ).filter(
                     Transaction.category == category,
-                    func.extract('year', Transaction.date) == year,
-                    func.extract('month', Transaction.date) < month,
-                    func.extract('month', Transaction.date) >= max(1, month - 6)
+                    Transaction.date >= six_months_ago.date(),
+                    Transaction.date < current_date.date()
                 ).group_by(
+                    func.extract('year', Transaction.date),
                     func.extract('month', Transaction.date)
+                ).subquery()
+                
+                # Get the average of monthly totals
+                avg_result = self.db.query(
+                    func.avg(historical.c.avg_amount)
                 ).scalar()
                 
-                if historical:
-                    historical_averages[category] = float(historical)
+                if avg_result:
+                    historical_averages[category] = float(avg_result)
             
             # Detect anomalies (only for expenses - negative amounts)
             anomalies = []

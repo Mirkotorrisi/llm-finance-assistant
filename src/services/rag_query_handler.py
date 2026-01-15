@@ -30,16 +30,19 @@ class RAGQueryHandler:
     def __init__(
         self, 
         narrative_rag_service: Optional[NarrativeRAGService] = None,
-        aggregation_service: Optional[AggregationService] = None
+        aggregation_service: Optional[AggregationService] = None,
+        currency_symbol: str = "€"
     ):
         """Initialize the query handler.
         
         Args:
             narrative_rag_service: Narrative RAG service. If None, creates new one.
             aggregation_service: Aggregation service for live queries. If None, creates new one.
+            currency_symbol: Currency symbol to use in responses (default: €)
         """
         self.narrative_rag = narrative_rag_service or NarrativeRAGService()
         self.aggregation_service = aggregation_service or AggregationService()
+        self.currency_symbol = currency_symbol
         
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -212,10 +215,10 @@ Based ONLY on the narratives above, answer the user's question. Be specific and 
             
             answer = (
                 f"Based on live data for {month_name} {year}: "
-                f"Total income was €{totals['total_income']:.2f}, "
-                f"total expenses were €{abs(totals['total_expense']):.2f}, "
-                f"resulting in net savings of €{totals['net_savings']:.2f}. "
-                f"Net worth was €{net_worth:.2f}."
+                f"Total income was {self.currency_symbol}{totals['total_income']:.2f}, "
+                f"total expenses were {self.currency_symbol}{abs(totals['total_expense']):.2f}, "
+                f"resulting in net savings of {self.currency_symbol}{totals['net_savings']:.2f}. "
+                f"Net worth was {self.currency_symbol}{net_worth:.2f}."
             )
             
             return {
