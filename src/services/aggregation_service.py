@@ -6,11 +6,11 @@ It is the ONLY source of truth for numerical data.
 
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
-from src.database.models import MonthlyAccountSnapshot, Transaction, Account
+from src.database.models import MonthlyAccountSnapshot, Transaction
 from src.database.init import get_db_session
 
 logger = logging.getLogger(__name__)
@@ -254,7 +254,6 @@ class AggregationService:
                 category = cat_data["category"]
                 
                 # Calculate date range for historical data (6 months back)
-                from datetime import datetime, timedelta
                 current_date = datetime(year, month, 1)
                 six_months_ago = current_date - timedelta(days=180)
                 
