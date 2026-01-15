@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from typing import Union, List, Dict, Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -70,10 +70,25 @@ def temporary_audio_file(audio_data: str):
                 print(f"Warning: Failed to delete temporary file {temp_path}: {e}")
 
 
+from src.database.init import init_database, close_database
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle events for the FastAPI application."""
+    # Startup
+    logger.info("Initializing database...")
+    init_database()
+    yield
+    # Shutdown
+    logger.info("Closing database...")
+    close_database()
+
+
 app = FastAPI(
     title="Finance Assistant API",
     description="A multimodal finance assistant supporting text and audio interactions",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Add CORS middleware

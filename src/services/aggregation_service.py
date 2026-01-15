@@ -31,20 +31,28 @@ class AggregationService:
         Args:
             db_session: SQLAlchemy session. If None, creates a new one.
         """
-        self.db = db_session if db_session else get_db_session()
+        self._db = db_session
         self.owns_session = db_session is None
+
+    @property
+    def db(self):
+        """Get the database session, initializing it if necessary."""
+        if self._db is None:
+            self._db = get_db_session()
+        return self._db
     
     def close(self):
         """Close the database session if we own it."""
-        if self.owns_session and self.db:
-            self.db.close()
+        if self.owns_session and self._db:
+            self._db.close()
+            self._db = None
             self.owns_session = False
     
     def __del__(self):
         """Cleanup when object is destroyed."""
-        if hasattr(self, 'owns_session') and self.owns_session and hasattr(self, 'db') and self.db:
+        if hasattr(self, 'owns_session') and self.owns_session and hasattr(self, '_db') and self._db:
             try:
-                self.db.close()
+                self._db.close()
             except Exception:
                 pass
     

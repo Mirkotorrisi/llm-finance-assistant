@@ -57,20 +57,28 @@ def init_database() -> None:
         else:
             print("Running in PRODUCTION mode - Skipping automatic table creation")
             
-    except OperationalError as e:
-        print(f"WARNING: Failed to connect to database: {e}")
-        print("The application will fall back to in-memory storage.")
-        print("To use database storage, please check:")
-        print("  1. DB_PASSWORD is set correctly in your .env file")
-        print("  2. Database host is accessible")
-        print("  3. Network/firewall settings allow connection")
-        # Don't exit - let the application fall back to in-memory storage
-        raise
-    except Exception as e:
+    except (OperationalError, Exception) as e:
         print(f"WARNING: Database initialization failed: {e}")
-        print("The application will fall back to in-memory storage.")
-        # Don't exit - let the application fall back to in-memory storage
-        raise
+        print("Falling back to in-memory SQLite storage...")
+        
+        try:
+            # Fallback to in-memory SQLite
+            engine = create_engine(
+                "sqlite:///:memory:",
+                connect_args={"check_same_thread": False},
+                poolclass=None,
+                echo=False
+            )
+            
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            
+            # Create tables
+            Base.metadata.create_all(bind=engine)
+            print("✓ In-memory database initialized successfully")
+            
+        except Exception as fallback_error:
+            print(f"CRITICAL: Failed to initialize in-memory fallback: {fallback_error}")
+            raise fallback_error
 
 
 def get_db() -> Generator[Session, None, None]:
