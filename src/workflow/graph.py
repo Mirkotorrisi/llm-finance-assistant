@@ -3,7 +3,7 @@
 from langgraph.graph import StateGraph, END
 from src.workflow.state import FinanceState
 from src.workflow.nodes import asr_node, nlu_node, query_node, generator_node
-from src.workflow.mcp_instance import get_mcp_server, reset_mcp_server
+
 
 
 def create_assistant_graph():

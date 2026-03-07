@@ -29,7 +29,7 @@ User (text/audio)
 └─────────────────────────────┘
 ```
 
-### Remote MCP Client (`src/workflow/mcp_instance.py`)
+### Remote MCP Client (`src/workflow/mcp_client.py`)
 
 `RemoteMCPClient` is the HTTP client that translates workflow calls into REST requests:
 
@@ -63,7 +63,7 @@ User (text/audio)
 llm-finance-assistant/
 ├── src/
 │   ├── workflow/          # Agentic workflow (LangGraph)
-│   │   ├── mcp_instance.py # RemoteMCPClient — HTTP client for the remote MCP server
+│   │   ├── mcp_client.py   # RemoteMCPClient — client for the remote MCP server
 │   │   ├── nodes.py       # Workflow nodes (ASR, NLU, Query, Generator)
 │   │   ├── graph.py       # Graph definition and compilation
 │   │   └── state.py       # State type definitions
@@ -72,7 +72,7 @@ llm-finance-assistant/
 │   ├── api/               # FastAPI application
 │   │   └── app.py         # API endpoints and WebSocket handler
 │   ├── services/          # File processing and RAG services
-│   └── main_api.py        # API server entry point
+│   └── app.py             # API server entry point
 └── README.md
 ```
 
@@ -117,7 +117,7 @@ llm-finance-assistant/
 Start the FastAPI server:
 
 ```bash
-python -m src.main_api
+python -m src.app
 ```
 
 The API will be available at `http://localhost:8000`
@@ -164,8 +164,8 @@ Once the server is running, visit:
    - **Automatic duplicate detection**: Skips already existing transactions (checked via MCP client)
    - **Smart categorization**: Uses LLM to assign appropriate categories to transactions
    - **Currency support**: Extracts from data or defaults to EUR
-   - **MCP client persistence**: Parsed and deduplicated transactions are bulk-added via the MCP client (`get_mcp_client()`), which delegates to the configured MCP server (local or remote)
-   - **RAG integration**: Transactions are automatically added to the in-memory vector store for semantic search
+  - **MCP client persistence**: Parsed and deduplicated transactions are bulk-added via the MCP client (`get_mcp_client()`), which delegates to the configured remote MCP server
+  - **RAG integration (temporary only)**: Transactions are added to an in-memory temporary store during upload flow only
    
    Example response:
    ```json
@@ -179,38 +179,7 @@ Once the server is running, visit:
    }
    ```
 
-5. **Search Transactions (RAG)**
-   ```
-   POST /api/transactions/search
-   Content-Type: application/json
-   
-   {
-     "query": "food and grocery expenses last month",
-     "top_k": 5
-   }
-   ```
-   
-   Uses semantic search (RAG) to find transactions matching natural language queries.
-   Transactions are embedded with OpenAI `text-embedding-3-small` and stored in an in-memory
-   vector store (populated at upload time). No changes to this endpoint are required when
-   switching to a remote MCP server—the RAG vector store remains local to the agent.
-   
-   Example response:
-   ```json
-   {
-     "query": "food and grocery expenses last month",
-     "results": [
-       {
-         "transaction": {"date": "2026-01-15", "description": "Walmart grocery", ...},
-         "text": "Date: 2026-01-15, Description: Walmart grocery, ...",
-         "similarity": 0.89
-       }
-     ],
-     "total_in_store": 150
-   }
-   ```
-
-6. **Chat (REST)**
+5. **Chat (REST)**
    ```
    POST /api/chat
    Content-Type: application/json
@@ -221,7 +190,7 @@ Once the server is running, visit:
    }
    ```
 
-7. **Chat with Audio (REST)**
+6. **Chat with Audio (REST)**
    ```
    POST /api/chat
    Content-Type: application/json
@@ -319,7 +288,7 @@ python -m pytest tests/ -v
 ### Module Structure
 
 - **workflow/**: LangGraph-based agentic workflow
-  - `mcp_instance.py`: `RemoteMCPClient` — HTTP client for the remote MCP server
+  - `mcp_client.py`: `RemoteMCPClient` — client for the remote MCP server
   - `nodes.py`: Workflow nodes (ASR, NLU, Query, Generator)
   - `graph.py`: Graph definition and compilation
   - `state.py`: State type definitions
@@ -334,7 +303,7 @@ python -m pytest tests/ -v
 
 ### RemoteMCPClient
 
-`RemoteMCPClient` (in `src/workflow/mcp_instance.py`) is the single point of contact with the remote finance-assistant-api server. It exposes the same method interface that the workflow nodes and API endpoints rely on, translating each call into an appropriate HTTP request.
+`RemoteMCPClient` (in `src/workflow/mcp_client.py`) is the single point of contact with the remote finance-assistant-api server. It exposes the same method interface that the workflow nodes and API endpoints rely on, translating each call into an appropriate remote request.
 
 ### Workflow Nodes
 
@@ -361,9 +330,7 @@ The services module handles bank statement uploads:
 - **RAGService**: In-memory vector store for semantic transaction search using OpenAI embeddings
 
 Transaction persistence in the upload flow uses `get_mcp_client()` from `src/workflow/__init__.py`,
-which currently delegates to the local MCP server instance. When the agent is refactored to call a
-remote MCP server (`finance-assistant-api`), only the `get_mcp_client()` implementation needs to
-change—the upload endpoint and services remain unchanged.
+which delegates to the remote MCP client facade in `src/workflow/mcp_client.py`.
 
 ## Contributing
 
