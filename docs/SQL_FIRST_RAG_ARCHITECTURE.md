@@ -1,5 +1,7 @@
 # SQL-First RAG Architecture
 
+> **Note:** This document describes the SQL-first RAG pipeline implemented in the remote **finance-assistant-api** MCP server. The `llm-finance-assistant` agent does not run any RAG or SQL logic locally; it delegates all such operations to that server via MCP tool calls. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the agent-client design.
+
 ## Overview
 
 This document describes the SQL-first RAG (Retrieval-Augmented Generation) architecture implemented for the LLM Finance Assistant. This architecture ensures that SQL is the single source of truth for all numerical data, while vector embeddings are used only for semantic search over pre-computed narrative summaries.

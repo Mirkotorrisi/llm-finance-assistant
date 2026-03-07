@@ -1,5 +1,7 @@
 # Monthly-Based Personal Finance Data Model
 
+> **Note:** This document describes the data model implemented in the remote **finance-assistant-api** MCP server. The `llm-finance-assistant` agent does not own or manage any local database; it delegates all data operations to that server. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the agent-client design.
+
 ## Overview
 
 This document describes the monthly-based personal finance data model implemented for this application. The design prioritizes **knowing how much money the user has now** and **comparing balances month-over-month**, inspired by a spreadsheet workflow.

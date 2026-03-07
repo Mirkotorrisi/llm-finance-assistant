@@ -1,6 +1,8 @@
 # SQL-First RAG Pipeline - Quick Start
 
-This document provides a quick overview of the new SQL-first RAG architecture. For detailed information, see [SQL_FIRST_RAG_ARCHITECTURE.md](./SQL_FIRST_RAG_ARCHITECTURE.md).
+> **Note:** This document describes the SQL-first RAG pipeline implemented in the remote **finance-assistant-api** MCP server. The `llm-finance-assistant` agent does not run any RAG or SQL logic locally. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the agent-client design.
+
+This document provides a quick overview of the SQL-first RAG architecture. For detailed information, see [SQL_FIRST_RAG_ARCHITECTURE.md](./SQL_FIRST_RAG_ARCHITECTURE.md).
 
 ## What Changed?
 

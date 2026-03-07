@@ -1,5 +1,7 @@
 # PostgreSQL Persistence Implementation
 
+> **Note:** This document describes the PostgreSQL persistence layer implemented in the remote **finance-assistant-api** MCP server. The `llm-finance-assistant` agent has no local database. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the agent-client design.
+
 This document describes the PostgreSQL persistence implementation for the LLM Finance Assistant.
 
 ## Overview
