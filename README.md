@@ -14,7 +14,6 @@ A professional virtual assistant for managing personal finances. This applicatio
 - **In-Memory Storage**: Lightweight session-scoped transaction store. All long-term persistence is handled by the external finance-assistant-api.
 - **State Management**: Built with `LangGraph` to manage conversational history and execution nodes.
 - **REST API & WebSocket**: FastAPI-based API for programmatic access and real-time chat via WebSocket.
-- **Debug Mode**: Includes a specialized logging mode to inspect LLM reasonings and system prompts.
 
 ## Architecture
 
@@ -66,37 +65,6 @@ llm-finance-assistant/
    ```
 
 ## Usage
-
-### Command Line Interface (CLI)
-
-Run the assistant in interactive mode:
-
-```bash
-python -m src.main_cli
-```
-
-#### CLI Commands Examples
-
-- **Queries**: "How much did I spend on food this week?"
-- **Additions**: "I spent 15.50 on a bus ticket today"
-- **Deletions**: "Delete transaction 4"
-- **Balance**: "What is my current total balance?"
-
-#### Audio Simulation
-
-To simulate audio input (transcribing a `.wav` file):
-
-```text
-You: audio:path/to/voice_note.wav
-```
-
-#### Debug Mode
-
-To inspect the LLM's reasoning prompts and MCP data output:
-
-```bash
-python -m src.main_cli --debug
-```
 
 ### REST API and WebSocket
 
