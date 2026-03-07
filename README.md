@@ -1,64 +1,69 @@
 # Multimodal Personal Finance Assistant
 
-A professional, self-contained virtual assistant for managing personal finances. This application allows users to interact via text or voice, perform complex queries on their financial data, and manage transactions through both a CLI and a REST API with WebSocket support.
+A multimodal virtual assistant for managing personal finances. This application allows users to interact via text or voice to query and manage their financial data. All finance data operations are delegated to a remote MCP server ([finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api)) via HTTP — the agent contains no local database or business logic for transactions.
+
+## Architecture: Agent as MCP Client
+
+This repository implements the **agent layer** only. All finance actions (listing transactions, adding expenses, checking balances, etc.) are performed by calling the remote MCP server over HTTP.
+
+```
+User (text/audio)
+       │
+       ▼
+┌─────────────────────────────────────┐
+│  LLM Finance Assistant (this repo)  │
+│  ┌──────────────────────────────┐   │
+│  │  ASR → NLU → Query → Gen    │   │
+│  │  (LangGraph workflow)        │   │
+│  └──────────┬───────────────────┘   │
+└─────────────┼───────────────────────┘
+              │  HTTP (REST)
+              ▼
+┌─────────────────────────────┐
+│  finance-assistant-api      │
+│  (Remote MCP Server)        │
+│  - /api/transactions        │
+│  - /api/balance             │
+│  - /api/accounts            │
+│  - /api/financial-data      │
+└─────────────────────────────┘
+```
+
+### Remote MCP Client (`src/workflow/mcp_instance.py`)
+
+`RemoteMCPClient` is the HTTP client that translates workflow calls into REST requests:
+
+| Method | Remote endpoint |
+|---|---|
+| `list_transactions(category, start_date, end_date)` | `GET /api/transactions` |
+| `add_transaction(amount, category, description, ...)` | `POST /api/transactions` |
+| `add_transactions_bulk(transactions)` | `POST /api/transactions/bulk` |
+| `delete_transaction(id)` | `DELETE /api/transactions/{id}` |
+| `get_balance()` | `GET /api/balance` |
+| `get_existing_categories()` | `GET /api/transactions` (derived) |
+| `get_accounts()` | `GET /api/accounts` |
+| `get_financial_data(year)` | `GET /api/financial-data/{year}` |
 
 ## Features
 
-- **Monthly-Based Financial Model**: Spreadsheet-inspired approach where monthly snapshots are the source of truth for balances. See [Monthly Data Model Documentation](docs/MONTHLY_DATA_MODEL.md) for details.
+- **Agent-as-Client Architecture**: Delegates all finance actions to the remote MCP server — no local DB required.
 - **Multimodal Interaction**: Supports text-based input and audio transcription (via `SpeechRecognition`).
-- **MCP Architecture**: Uses a Model Context Protocol (MCP) simulation to decouple business logic from the conversational flow.
 - **Intelligent NLU**: Powered by OpenAI's `gpt-4o-mini` to dynamically interpret user intent, categories, and timeframes.
 - **Dynamic Transaction Management**:
   - Add expenses or income.
   - Delete transactions by ID.
   - Query historic spending with natural language (e.g., "last 3 days", "this week").
-- **PostgreSQL Persistence**: Optional database-backed storage with automatic table creation in development mode.
 - **State Management**: Built with `LangGraph` to manage conversational history and execution nodes.
 - **REST API & WebSocket**: FastAPI-based API for programmatic access and real-time chat via WebSocket.
 - **Debug Mode**: Includes a specialized logging mode to inspect LLM reasonings and system prompts.
 
-## Data Model
-
-This application uses a **monthly-based financial model** where:
-
-- **Monthly snapshots** are the source of truth for account balances
-- **Transactions** are optional details, not authoritative for totals
-- **High-level numbers** (balances, totals) come from snapshots, not from aggregating transactions
-
-Key entities:
-- `Account` - Financial accounts (checking, savings, credit, etc.)
-- `MonthlyAccountSnapshot` - **Core entity** representing monthly financial state
-- `Transaction` - Optional individual income/expense entries
-- `Category` - Transaction categories with type (income/expense) and color
-
-For complete details, see [Monthly Data Model Documentation](docs/MONTHLY_DATA_MODEL.md).
-
-### Demo
-
-Run the demo script to see the monthly data model in action:
-
-```bash
-python scripts/demo_monthly_model.py
-```
-
-## Architecture
-
-The application is organized into a modular structure:
+## Code Structure
 
 ```
 llm-finance-assistant/
 ├── src/
-│   ├── business_logic/    # Business logic layer
-│   │   ├── mcp.py         # FinanceMCP class (in-memory)
-│   │   ├── mcp_database.py # FinanceMCPDatabase class (PostgreSQL)
-│   │   ├── snapshot_service.py # SnapshotService for monthly model
-│   │   └── data.py        # Initial data setup
-│   ├── database/          # Database layer
-│   │   ├── models.py      # SQLAlchemy ORM models
-│   │   └── init.py        # Database initialization
-│   ├── config/            # Configuration
-│   │   └── database.py    # Database configuration
 │   ├── workflow/          # Agentic workflow (LangGraph)
+│   │   ├── mcp_instance.py # RemoteMCPClient — HTTP client for the remote MCP server
 │   │   ├── nodes.py       # Workflow nodes (ASR, NLU, Query, Generator)
 │   │   ├── graph.py       # Graph definition and compilation
 │   │   └── state.py       # State type definitions
@@ -66,14 +71,8 @@ llm-finance-assistant/
 │   │   └── domain.py      # Domain models (Action, Parameters, etc.)
 │   ├── api/               # FastAPI application
 │   │   └── app.py         # API endpoints and WebSocket handler
-│   ├── main_cli.py        # CLI entry point
+│   ├── services/          # File processing and RAG services
 │   └── main_api.py        # API server entry point
-├── scripts/               # Utility scripts
-│   ├── seed_database.py   # Database seeding script
-│   └── demo_monthly_model.py # Monthly model demonstration
-├── docs/                  # Documentation
-│   └── MONTHLY_DATA_MODEL.md # Monthly data model documentation
-├── finance_assistant.py   # Original monolithic file (deprecated)
 └── README.md
 ```
 
@@ -81,7 +80,7 @@ llm-finance-assistant/
 
 - Python 3.10+
 - OpenAI API Key
-- PostgreSQL Database (optional, for persistent storage)
+- Running instance of [finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api) (the remote MCP server)
 
 ## Setup
 
@@ -94,7 +93,7 @@ llm-finance-assistant/
 
    Or using pip:
    ```bash
-   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets pypdf2 openpyxl pandas python-multipart sqlalchemy psycopg2-binary alembic
+   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets pypdf2 openpyxl pandas python-multipart requests
    ```
 
 2. **Configure Environment**:
@@ -102,69 +101,16 @@ llm-finance-assistant/
 
    ```env
    OPENAI_API_KEY=your_actual_key_here
-   
-   # Database Configuration (optional)
-   DB_PASSWORD=your_database_password_here
-   ENVIRONMENT=development
-   USE_DATABASE=true
+
+   # URL of the remote finance-assistant-api MCP server
+   MCP_SERVER_BASE_URL=http://localhost:8000
    ```
 
-   **Database Configuration Options:**
-   - `USE_DATABASE=true`: Use PostgreSQL for persistent storage
-   - `USE_DATABASE=false`: Use in-memory storage (default if DB_PASSWORD not set)
-   - `ENVIRONMENT=development`: Automatically create tables on startup
-   - `ENVIRONMENT=production`: Tables must be created manually
+3. **Start the Remote MCP Server**:
 
-3. **Database Setup** (Optional):
-   
-   If you want to use PostgreSQL for persistent storage:
-   
-   a. The connection details are configured in `src/config/database.py`:
-      - Host: `ai-financial-assistant-bollette.e.aivencloud.com`
-      - Port: `22782`
-      - Database: `defaultdb`
-      - User: `avnadmin`
-      - Password: Set via `DB_PASSWORD` environment variable
-   
-   b. In development mode, tables are created automatically on first run
-   
-   c. To seed the database with initial data:
-      ```bash
-      python scripts/seed_database.py
-      ```
+   Clone and run [finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api) first, then point `MCP_SERVER_BASE_URL` at it.
 
 ## Usage
-
-### Command Line Interface (CLI)
-
-Run the assistant in interactive mode:
-
-```bash
-python -m src.main_cli
-```
-
-#### CLI Commands Examples
-
-- **Queries**: "How much did I spend on food this week?"
-- **Additions**: "I spent 15.50 on a bus ticket today"
-- **Deletions**: "Delete transaction 4"
-- **Balance**: "What is my current total balance?"
-
-#### Audio Simulation
-
-To simulate audio input (transcribing a `.wav` file):
-
-```text
-You: audio:path/to/voice_note.wav
-```
-
-#### Debug Mode
-
-To inspect the LLM's reasoning prompts and MCP data output:
-
-```bash
-python -m src.main_cli --debug
-```
 
 ### REST API and WebSocket
 
@@ -215,10 +161,11 @@ Once the server is running, visit:
    
    Features:
    - **LLM-based PDF parsing**: Intelligently extracts transactions from bank statement PDFs using OpenAI
-   - **Automatic duplicate detection**: Skips already existing transactions
+   - **Automatic duplicate detection**: Skips already existing transactions (checked via MCP client)
    - **Smart categorization**: Uses LLM to assign appropriate categories to transactions
    - **Currency support**: Extracts from data or defaults to EUR
-   - **RAG integration**: Transactions are automatically added to vector store for semantic search
+   - **MCP client persistence**: Parsed and deduplicated transactions are bulk-added via the MCP client (`get_mcp_client()`), which delegates to the configured MCP server (local or remote)
+   - **RAG integration**: Transactions are automatically added to the in-memory vector store for semantic search
    
    Example response:
    ```json
@@ -244,6 +191,9 @@ Once the server is running, visit:
    ```
    
    Uses semantic search (RAG) to find transactions matching natural language queries.
+   Transactions are embedded with OpenAI `text-embedding-3-small` and stored in an in-memory
+   vector store (populated at upload time). No changes to this endpoint are required when
+   switching to a remote MCP server—the RAG vector store remains local to the agent.
    
    Example response:
    ```json
@@ -295,15 +245,6 @@ Connect to the WebSocket endpoint at `ws://localhost:8000/ws/chat`
 }
 ```
 
-**Send message (audio)**:
-```json
-{
-  "message": "audio query",
-  "is_audio": true,
-  "audio_data": "<base64-encoded WAV file>"
-}
-```
-
 **Receive response**:
 ```json
 {
@@ -338,32 +279,9 @@ with open("statement.csv", "rb") as f:
     # Output: {"success": true, "transactions_added": 5, ...}
 ```
 
-### Using WebSocket with Python
-
-```python
-import asyncio
-import websockets
-import json
-
-async def chat():
-    uri = "ws://localhost:8000/ws/chat"
-    async with websockets.connect(uri) as websocket:
-        # Send message
-        await websocket.send(json.dumps({
-            "message": "What is my balance?",
-            "is_audio": False
-        }))
-        
-        # Receive response
-        response = await websocket.recv()
-        print(json.loads(response))
-
-asyncio.run(chat())
-```
-
 ### Bank Statement Upload Format
 
-The `/statements/upload` endpoint accepts bank statements in CSV, Excel (XLS/XLSX), or PDF format. For best results, ensure your files contain the following columns (names are case-insensitive):
+The `/statements/upload` endpoint accepts bank statements in CSV, Excel (XLS/XLSX), or PDF format.
 
 #### CSV/Excel Format
 
@@ -383,17 +301,10 @@ date,description,amount,currency,category
 
 #### PDF Format
 
-PDF files are parsed to extract text, and the system attempts to identify transactions using pattern matching. For best results, PDF statements should contain:
+PDF files are parsed to extract text. For best results, PDF statements should contain:
 - Date in format: DD/MM/YYYY or MM/DD/YYYY or YYYY-MM-DD
 - Clear transaction descriptions
 - Amounts with currency symbols ($, €, £) or numeric values
-
-#### Features
-
-- **Automatic duplicate detection**: The system checks if a transaction already exists (based on date, amount, and description) before adding it
-- **Smart categorization**: Transactions are automatically categorized into: food, transport, shopping, utilities, rent, income, or other
-- **Currency support**: Supports USD, EUR, GBP, JPY with automatic extraction from transaction data
-- **Error handling**: Clear error messages for unsupported formats or oversized files (max 10 MB)
 
 ## Development
 
@@ -411,26 +322,24 @@ The test suite targets the agent client architecture and covers:
 |---|---|
 | `test_agent_workflow.py` | LangGraph graph creation, ASR / NLU / query / generator nodes |
 | `test_websocket_chat.py` | WebSocket connection, text messages, error handling |
+| `test_mcp_client.py` | `RemoteMCPClient` interface and HTTP calls to the remote MCP server |
 | `test_file_processor.py` | File validation, CSV/PDF extraction |
 | `test_transaction_parser.py` | Date/amount parsing, categorization, duplicate removal |
 | `test_llm_pdf_parsing.py` | LLM-based PDF statement parsing |
 | `test_rag_service.py` | In-memory RAG vector store for semantic search |
 | `test_narrative_rag.py` | Narrative RAG document management and querying |
+| `test_narrative_generator.py` | Narrative document generation from financial data |
+| `test_rag_query_handler.py` | RAG-based conversational query handling |
 | `test_integration.py` | End-to-end REST API including file upload |
 | `test_rag_search.py` | Semantic search REST endpoint |
 
 ### Module Structure
 
-- **business_logic/**: Contains the core financial transaction logic
-  - `mcp.py`: In-memory transaction management (FinanceMCP)
-  - `mcp_database.py`: Database-backed transaction management (FinanceMCPDatabase)
-  - `data.py`: Initial sample data
-- **database/**: Database ORM models and initialization
-  - `models.py`: SQLAlchemy models for Transaction and Category tables
-  - `init.py`: Database connection and table creation logic
-- **config/**: Application configuration
-  - `database.py`: Database connection settings
-- **workflow/**: Contains the LangGraph-based agentic workflow with ASR, NLU, query execution, and response generation nodes
+- **workflow/**: LangGraph-based agentic workflow
+  - `mcp_instance.py`: `RemoteMCPClient` — HTTP client for the remote MCP server
+  - `nodes.py`: Workflow nodes (ASR, NLU, Query, Generator)
+  - `graph.py`: Graph definition and compilation
+  - `state.py`: State type definitions
 - **models/**: Shared Pydantic models for type safety and validation
 - **api/**: FastAPI application with REST and WebSocket endpoints
 - **services/**: File processing, transaction parsing, and RAG services
@@ -438,72 +347,23 @@ The test suite targets the agent client architecture and covers:
   - `transaction_parser.py`: Parses extracted data using LLM for intelligent categorization and PDF extraction
   - `vectorization.py`: RAG service with in-memory vector store for semantic transaction search
 
-### Database Persistence
-
-The application supports two storage modes:
-
-1. **In-Memory Storage** (Default when DB_PASSWORD not set):
-   - Fast and simple
-   - No setup required
-   - Data is lost when application restarts
-   - Good for testing and development
-
-2. **PostgreSQL Storage** (When USE_DATABASE=true and DB_PASSWORD is set):
-   - Persistent data storage
-   - Automatic table creation in development mode
-   - Two tables: `transactions` and `categories`
-   - Supports full transaction history
-
-**Database Tables:**
-
-- **transactions**: Stores all financial transactions
-  - id (primary key)
-  - date, amount, category, description, currency
-  - created_at, updated_at
-  
-- **categories**: Stores unique category names
-  - id (primary key)
-  - name (unique)
-  - created_at, updated_at
-
-**Automatic Migration:**
-In development mode (`ENVIRONMENT=development`), tables are automatically created on application startup using SQLAlchemy's `create_all()` method.
-
 ## Key Components
 
-### FinanceMCP (Business Logic)
+### RemoteMCPClient
 
-The application provides two implementations:
-
-1. **FinanceMCP** (In-Memory):
-   - Stores transactions in memory
-   - Fast and simple
-   - Located in `src/business_logic/mcp.py`
-
-2. **FinanceMCPDatabase** (PostgreSQL):
-   - Stores transactions in PostgreSQL
-   - Persistent storage
-   - Located in `src/business_logic/mcp_database.py`
-
-Both provide the same interface:
-- `list_transactions()`: Query transactions with filters
-- `add_transaction()`: Add new transaction (with optional currency support)
-- `add_transactions_bulk()`: Add multiple transactions at once
-- `delete_transaction()`: Remove transaction by ID
-- `get_balance()`: Get current balance
-- `get_existing_categories()`: Get list of unique categories
+`RemoteMCPClient` (in `src/workflow/mcp_instance.py`) is the single point of contact with the remote finance-assistant-api server. It exposes the same method interface that the workflow nodes and API endpoints rely on, translating each call into an appropriate HTTP request.
 
 ### Workflow Nodes
 
 1. **ASR Node**: Converts audio to text (or passes through text input)
 2. **NLU Node**: Uses LLM to extract intent and parameters
-3. **Query Node**: Executes the action on the MCP server
+3. **Query Node**: Executes the action via the remote MCP client
 4. **Generator Node**: Generates natural language response
 
 ### API Application
 
 FastAPI application with:
-- REST endpoints for direct access to transactions and balance
+- REST endpoints that proxy to the remote MCP server for transactions and balance
 - POST endpoint for uploading and processing bank statements (PDF, Excel, CSV) with LLM-based parsing
 - POST endpoint for semantic transaction search using RAG
 - POST endpoint for processing chat requests
@@ -515,12 +375,16 @@ FastAPI application with:
 The services module handles bank statement uploads:
 - **FileProcessor**: Validates file formats/sizes and extracts raw data from PDF, Excel, and CSV files
 - **TransactionParser**: Uses LLM (GPT-4o-mini) to intelligently parse PDFs and categorize transactions
-- **RAGService**: In-memory vector store for semantic transaction search using embeddings
+- **RAGService**: In-memory vector store for semantic transaction search using OpenAI embeddings
+
+Transaction persistence in the upload flow uses `get_mcp_client()` from `src/workflow/__init__.py`,
+which delegates all finance actions to the remote MCP server (`finance-assistant-api`) over HTTP.
+Only the `get_mcp_client()` implementation needs to change if the remote server URL changes —
+the upload endpoint and services remain unchanged.
 
 ## Contributing
 
 The modular structure makes it easy to:
-- Add new transaction types in `business_logic/mcp.py`
 - Add new workflow nodes in `workflow/nodes.py`
 - Extend API endpoints in `api/app.py`
 - Add new models in `models/domain.py`
