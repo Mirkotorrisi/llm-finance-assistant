@@ -3,7 +3,6 @@
 from src.services.file_processor import FileProcessor, FileValidationError
 from src.services.transaction_parser import TransactionParser
 from src.services.vectorization import RAGService
-from src.services.aggregation_service import AggregationService
 from src.services.narrative_generator import NarrativeGenerator
 from src.services.narrative_vectorization import NarrativeRAGService
 from src.services.rag_query_handler import RAGQueryHandler
@@ -13,7 +12,6 @@ __all__ = [
     "FileValidationError",
     "TransactionParser",
     "RAGService",
-    "AggregationService",
     "NarrativeGenerator",
     "NarrativeRAGService",
     "RAGQueryHandler"
