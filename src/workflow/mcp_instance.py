@@ -1,101 +1,110 @@
-"""Global MCP server instance management."""
+"""Remote MCP client for the finance-assistant-api server."""
 
-import datetime
-from typing import List, Optional
+import os
+import requests
+from dotenv import load_dotenv
 
-# Global MCP instance
-_mcp_server = None
+load_dotenv()
+
+MCP_SERVER_BASE_URL = os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8000")
+
+# Global MCP client instance
+_mcp_client = None
 
 
-class FinanceMCP:
-    """Simple in-memory MCP server for personal finance transactions.
+class RemoteMCPClient:
+    """HTTP client that delegates all finance actions to the remote MCP server."""
 
-    Acts as a lightweight client-side store until all persistence is
-    delegated to finance-assistant-api.
-    """
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+        self.session = requests.Session()
 
-    def __init__(self):
-        self.transactions: List[dict] = []
-        self.next_id: int = 1
-
-    def list_transactions(
-        self,
-        category: Optional[str] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-    ) -> List[dict]:
-        """List transactions with optional filters."""
-        results = self.transactions
+    def list_transactions(self, category=None, start_date=None, end_date=None):
+        """List transactions from the remote server with optional filters."""
+        params = {}
         if category:
-            results = [t for t in results if t["category"].lower() == category.lower()]
+            params["category"] = category
         if start_date:
-            results = [t for t in results if t["date"] >= start_date]
+            params["start_date"] = start_date
         if end_date:
-            results = [t for t in results if t["date"] <= end_date]
-        return results
+            params["end_date"] = end_date
+        response = self.session.get(f"{self.base_url}/api/transactions", params=params)
+        response.raise_for_status()
+        return response.json()
 
-    def add_transaction(
-        self,
-        amount: float,
-        category: str,
-        description: str,
-        date: Optional[str] = None,
-        currency: Optional[str] = None,
-    ) -> dict:
-        """Add a new transaction."""
-        if not date:
-            date = datetime.date.today().isoformat()
-        new_entry: dict = {
-            "id": self.next_id,
-            "date": date,
+    def add_transaction(self, amount, category, description, date=None, currency="EUR"):
+        """Add a single transaction via the remote server."""
+        data = {
             "amount": amount,
             "category": category,
             "description": description,
+            "currency": currency,
         }
-        if currency:
-            new_entry["currency"] = currency
-        self.transactions.append(new_entry)
-        self.next_id += 1
-        return new_entry
+        if date:
+            data["date"] = date
+        response = self.session.post(f"{self.base_url}/api/transactions", json=data)
+        response.raise_for_status()
+        return response.json()
 
-    def add_transactions_bulk(self, transactions: List[dict]) -> List[dict]:
-        """Add multiple transactions at once."""
-        return [
-            self.add_transaction(
-                amount=t["amount"],
-                category=t["category"],
-                description=t["description"],
-                date=t.get("date"),
-                currency=t.get("currency"),
-            )
-            for t in transactions
-        ]
+    def add_transactions_bulk(self, transactions):
+        """Add multiple transactions in a single request to the remote server."""
+        response = self.session.post(
+            f"{self.base_url}/api/transactions/bulk", json=transactions
+        )
+        response.raise_for_status()
+        return response.json()
 
-    def delete_transaction(self, transaction_id: int) -> bool:
-        """Delete a transaction by ID."""
-        original_count = len(self.transactions)
-        self.transactions = [t for t in self.transactions if t.get("id") != transaction_id]
-        return len(self.transactions) < original_count
+    def delete_transaction(self, transaction_id):
+        """Delete a transaction by ID via the remote server."""
+        response = self.session.delete(
+            f"{self.base_url}/api/transactions/{transaction_id}"
+        )
+        response.raise_for_status()
+        return response.json()
 
-    def get_balance(self) -> float:
-        """Get the current balance (sum of all transaction amounts)."""
-        return sum(t["amount"] for t in self.transactions)
+    def get_balance(self):
+        """Get the current total balance from the remote server."""
+        response = self.session.get(f"{self.base_url}/api/balance")
+        response.raise_for_status()
+        return response.json()["balance"]
 
-    def get_existing_categories(self) -> List[str]:
-        """Get a sorted list of unique category names."""
-        return sorted({t["category"] for t in self.transactions if t.get("category")})
+    def get_existing_categories(self):
+        """Return a sorted list of unique transaction categories from the remote server."""
+        transactions = self.list_transactions()
+        categories = sorted(
+            set(t["category"] for t in transactions if t.get("category"))
+        )
+        return categories
+
+    def get_accounts(self):
+        """List all financial accounts from the remote server."""
+        response = self.session.get(f"{self.base_url}/api/accounts")
+        response.raise_for_status()
+        return response.json()
+
+    def get_financial_data(self, year: int):
+        """Get aggregated yearly financial data from the remote server."""
+        response = self.session.get(f"{self.base_url}/api/financial-data/{year}")
+        response.raise_for_status()
+        return response.json()
 
 
-def get_mcp_server() -> FinanceMCP:
-    """Get the global MCP server instance."""
-    global _mcp_server
-    if _mcp_server is None:
-        _mcp_server = FinanceMCP()
-        print("✓ Using in-memory transaction storage")
-    return _mcp_server
+def get_mcp_server():
+    """Get the global remote MCP client instance.
+
+    Returns:
+        RemoteMCPClient connected to the configured MCP server URL
+    """
+    global _mcp_client
+
+    if _mcp_client is None:
+        _mcp_client = RemoteMCPClient(MCP_SERVER_BASE_URL)
+        print(f"✓ Using remote MCP server at {MCP_SERVER_BASE_URL}")
+
+    return _mcp_client
 
 
-def reset_mcp_server() -> None:
-    """Reset the MCP server, discarding all in-memory transactions."""
-    global _mcp_server
-    _mcp_server = FinanceMCP()
+def reset_mcp_server():
+    """Reset the MCP client, forcing re-creation on the next call to get_mcp_server."""
+    global _mcp_client
+    _mcp_client = RemoteMCPClient(MCP_SERVER_BASE_URL)

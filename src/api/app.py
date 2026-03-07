@@ -166,6 +166,28 @@ async def get_balance():
     return {"balance": balance}
 
 
+@app.get("/api/financial-data/{year}")
+async def get_financial_data(year: int) -> FinancialDataResponse:
+    """Get aggregated financial data for a specific year.
+    
+    Args:
+        year: Year to fetch financial data for (YYYY)
+        
+    Returns:
+        Aggregated financial data including monthly breakdown and account breakdown
+        
+    Raises:
+        HTTPException: If there's an error fetching the data
+    """
+    try:
+        mcp_client = get_mcp_server()
+        data = mcp_client.get_financial_data(year)
+        return FinancialDataResponse(**data)
+    except Exception as e:
+        logger.error(f"Error fetching financial data for year {year}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching financial data: {str(e)}")
+
+
 @app.post("/statements/upload")
 async def upload_statement(file: UploadFile = File(...)) -> UploadStatementResponse:
     """Upload and process a bank statement file.

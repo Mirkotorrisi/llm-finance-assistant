@@ -1,29 +1,69 @@
 # Multimodal Personal Finance Assistant
 
-A professional virtual assistant for managing personal finances. This application allows users to interact via text or voice, perform complex queries on their financial data, and manage transactions through both a CLI and a REST API with WebSocket support.
+A multimodal virtual assistant for managing personal finances. This application allows users to interact via text or voice to query and manage their financial data. All finance data operations are delegated to a remote MCP server ([finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api)) via HTTP — the agent contains no local database or business logic for transactions.
+
+## Architecture: Agent as MCP Client
+
+This repository implements the **agent layer** only. All finance actions (listing transactions, adding expenses, checking balances, etc.) are performed by calling the remote MCP server over HTTP.
+
+```
+User (text/audio)
+       │
+       ▼
+┌─────────────────────────────────────┐
+│  LLM Finance Assistant (this repo)  │
+│  ┌──────────────────────────────┐   │
+│  │  ASR → NLU → Query → Gen    │   │
+│  │  (LangGraph workflow)        │   │
+│  └──────────┬───────────────────┘   │
+└─────────────┼───────────────────────┘
+              │  HTTP (REST)
+              ▼
+┌─────────────────────────────┐
+│  finance-assistant-api      │
+│  (Remote MCP Server)        │
+│  - /api/transactions        │
+│  - /api/balance             │
+│  - /api/accounts            │
+│  - /api/financial-data      │
+└─────────────────────────────┘
+```
+
+### Remote MCP Client (`src/workflow/mcp_instance.py`)
+
+`RemoteMCPClient` is the HTTP client that translates workflow calls into REST requests:
+
+| Method | Remote endpoint |
+|---|---|
+| `list_transactions(category, start_date, end_date)` | `GET /api/transactions` |
+| `add_transaction(amount, category, description, ...)` | `POST /api/transactions` |
+| `add_transactions_bulk(transactions)` | `POST /api/transactions/bulk` |
+| `delete_transaction(id)` | `DELETE /api/transactions/{id}` |
+| `get_balance()` | `GET /api/balance` |
+| `get_existing_categories()` | `GET /api/transactions` (derived) |
+| `get_accounts()` | `GET /api/accounts` |
+| `get_financial_data(year)` | `GET /api/financial-data/{year}` |
 
 ## Features
 
+- **Agent-as-Client Architecture**: Delegates all finance actions to the remote MCP server — no local DB required.
 - **Multimodal Interaction**: Supports text-based input and audio transcription (via `SpeechRecognition`).
-- **MCP Architecture**: Uses an in-memory Model Context Protocol (MCP) store to decouple transaction management from the conversational flow.
 - **Intelligent NLU**: Powered by OpenAI's `gpt-4o-mini` to dynamically interpret user intent, categories, and timeframes.
 - **Dynamic Transaction Management**:
   - Add expenses or income.
   - Delete transactions by ID.
   - Query historic spending with natural language (e.g., "last 3 days", "this week").
-- **In-Memory Storage**: Lightweight session-scoped transaction store. All long-term persistence is handled by the external finance-assistant-api.
 - **State Management**: Built with `LangGraph` to manage conversational history and execution nodes.
 - **REST API & WebSocket**: FastAPI-based API for programmatic access and real-time chat via WebSocket.
+- **Debug Mode**: Includes a specialized logging mode to inspect LLM reasonings and system prompts.
 
-## Architecture
-
-The agent is a **pure client**: all persistence and financial computation are delegated to the external `finance-assistant-api`. The local MCP store is a lightweight in-memory cache for the current session only.
+## Code Structure
 
 ```
 llm-finance-assistant/
 ├── src/
 │   ├── workflow/          # Agentic workflow (LangGraph)
-│   │   ├── mcp_instance.py # In-memory MCP store (session-scoped)
+│   │   ├── mcp_instance.py # RemoteMCPClient — HTTP client for the remote MCP server
 │   │   ├── nodes.py       # Workflow nodes (ASR, NLU, Query, Generator)
 │   │   ├── graph.py       # Graph definition and compilation
 │   │   └── state.py       # State type definitions
@@ -31,10 +71,9 @@ llm-finance-assistant/
 │   │   └── domain.py      # Domain models (Action, Parameters, etc.)
 │   ├── api/               # FastAPI application
 │   │   └── app.py         # API endpoints and WebSocket handler
-│   ├── services/          # File processing, parsing, and RAG services
+│   ├── services/          # File processing and RAG services
 │   ├── main_cli.py        # CLI entry point
 │   └── main_api.py        # API server entry point
-├── finance_assistant.py   # Original monolithic file (deprecated)
 └── README.md
 ```
 
@@ -42,6 +81,7 @@ llm-finance-assistant/
 
 - Python 3.10+
 - OpenAI API Key
+- Running instance of [finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api) (the remote MCP server)
 
 ## Setup
 
@@ -54,7 +94,7 @@ llm-finance-assistant/
 
    Or using pip:
    ```bash
-   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets pypdf2 openpyxl pandas python-multipart
+   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets pypdf2 openpyxl pandas python-multipart requests
    ```
 
 2. **Configure Environment**:
@@ -62,7 +102,14 @@ llm-finance-assistant/
 
    ```env
    OPENAI_API_KEY=your_actual_key_here
+
+   # URL of the remote finance-assistant-api MCP server
+   MCP_SERVER_BASE_URL=http://localhost:8000
    ```
+
+3. **Start the Remote MCP Server**:
+
+   Clone and run [finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api) first, then point `MCP_SERVER_BASE_URL` at it.
 
 ## Usage
 
@@ -253,8 +300,11 @@ python -m pytest tests/ -v
 
 ### Module Structure
 
-- **workflow/**: Contains the LangGraph-based agentic workflow with ASR, NLU, query execution, and response generation nodes
-  - `mcp_instance.py`: In-memory MCP store (session-scoped, no DB dependency)
+- **workflow/**: LangGraph-based agentic workflow
+  - `mcp_instance.py`: `RemoteMCPClient` — HTTP client for the remote MCP server
+  - `nodes.py`: Workflow nodes (ASR, NLU, Query, Generator)
+  - `graph.py`: Graph definition and compilation
+  - `state.py`: State type definitions
 - **models/**: Shared Pydantic models for type safety and validation
 - **api/**: FastAPI application with REST and WebSocket endpoints
 - **services/**: File processing, transaction parsing, and RAG services
@@ -262,17 +312,23 @@ python -m pytest tests/ -v
   - `transaction_parser.py`: Parses extracted data using LLM for intelligent categorization and PDF extraction
   - `vectorization.py`: RAG service with in-memory vector store for semantic transaction search
 
+## Key Components
+
+### RemoteMCPClient
+
+`RemoteMCPClient` (in `src/workflow/mcp_instance.py`) is the single point of contact with the remote finance-assistant-api server. It exposes the same method interface that the workflow nodes and API endpoints rely on, translating each call into an appropriate HTTP request.
+
 ### Workflow Nodes
 
 1. **ASR Node**: Converts audio to text (or passes through text input)
 2. **NLU Node**: Uses LLM to extract intent and parameters
-3. **Query Node**: Executes the action on the in-memory MCP store
+3. **Query Node**: Executes the action via the remote MCP client
 4. **Generator Node**: Generates natural language response
 
 ### API Application
 
 FastAPI application with:
-- REST endpoints for direct access to transactions and balance
+- REST endpoints that proxy to the remote MCP server for transactions and balance
 - POST endpoint for uploading and processing bank statements (PDF, Excel, CSV) with LLM-based parsing
 - POST endpoint for semantic transaction search using RAG
 - POST endpoint for processing chat requests
