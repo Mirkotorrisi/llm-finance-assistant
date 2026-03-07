@@ -1,61 +1,110 @@
-"""Global MCP server instance management."""
+"""Remote MCP client for the finance-assistant-api server."""
 
 import os
-from src.business_logic import FinanceMCP, get_initial_data
+import requests
+from dotenv import load_dotenv
 
-# Check if database should be used
-USE_DATABASE = os.getenv("USE_DATABASE", "true").lower() == "true"
+load_dotenv()
 
-# Try to import database MCP, fall back to in-memory if not available
-if USE_DATABASE:
-    try:
-        from src.business_logic.mcp_database import FinanceMCPDatabase
-        from src.database.init import init_database
-        _database_initialized = False
-    except ImportError:
-        USE_DATABASE = False
-        print("Warning: Database modules not available, using in-memory storage")
+MCP_SERVER_BASE_URL = os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8000")
 
-# Global MCP instance
-_mcp_server = None
+# Global MCP client instance
+_mcp_client = None
+
+
+class RemoteMCPClient:
+    """HTTP client that delegates all finance actions to the remote MCP server."""
+
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+        self.session = requests.Session()
+
+    def list_transactions(self, category=None, start_date=None, end_date=None):
+        """List transactions from the remote server with optional filters."""
+        params = {}
+        if category:
+            params["category"] = category
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        response = self.session.get(f"{self.base_url}/api/transactions", params=params)
+        response.raise_for_status()
+        return response.json()
+
+    def add_transaction(self, amount, category, description, date=None, currency="EUR"):
+        """Add a single transaction via the remote server."""
+        data = {
+            "amount": amount,
+            "category": category,
+            "description": description,
+            "currency": currency,
+        }
+        if date:
+            data["date"] = date
+        response = self.session.post(f"{self.base_url}/api/transactions", json=data)
+        response.raise_for_status()
+        return response.json()
+
+    def add_transactions_bulk(self, transactions):
+        """Add multiple transactions in a single request to the remote server."""
+        response = self.session.post(
+            f"{self.base_url}/api/transactions/bulk", json=transactions
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def delete_transaction(self, transaction_id):
+        """Delete a transaction by ID via the remote server."""
+        response = self.session.delete(
+            f"{self.base_url}/api/transactions/{transaction_id}"
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_balance(self):
+        """Get the current total balance from the remote server."""
+        response = self.session.get(f"{self.base_url}/api/balance")
+        response.raise_for_status()
+        return response.json()["balance"]
+
+    def get_existing_categories(self):
+        """Return a sorted list of unique transaction categories from the remote server."""
+        transactions = self.list_transactions()
+        categories = sorted(
+            set(t["category"] for t in transactions if t.get("category"))
+        )
+        return categories
+
+    def get_accounts(self):
+        """List all financial accounts from the remote server."""
+        response = self.session.get(f"{self.base_url}/api/accounts")
+        response.raise_for_status()
+        return response.json()
+
+    def get_financial_data(self, year: int):
+        """Get aggregated yearly financial data from the remote server."""
+        response = self.session.get(f"{self.base_url}/api/financial-data/{year}")
+        response.raise_for_status()
+        return response.json()
 
 
 def get_mcp_server():
-    """Get the global MCP server instance.
-    
+    """Get the global remote MCP client instance.
+
     Returns:
-        The MCP server instance (database-backed or in-memory)
+        RemoteMCPClient connected to the configured MCP server URL
     """
-    global _mcp_server, _database_initialized
-    
-    if _mcp_server is None:
-        if USE_DATABASE:
-            # Initialize database if not already done
-            if not _database_initialized:
-                try:
-                    init_database()
-                    _database_initialized = True
-                except Exception as e:
-                    print(f"Warning: Failed to initialize database: {e}")
-                    print("Falling back to in-memory storage")
-                    _mcp_server = FinanceMCP(get_initial_data())
-                    return _mcp_server
-            
-            # Use database-backed MCP
-            _mcp_server = FinanceMCPDatabase()
-            print("✓ Using database-backed transaction storage")
-        else:
-            # Use in-memory MCP
-            _mcp_server = FinanceMCP(get_initial_data())
-            print("✓ Using in-memory transaction storage")
-    
-    return _mcp_server
+    global _mcp_client
+
+    if _mcp_client is None:
+        _mcp_client = RemoteMCPClient(MCP_SERVER_BASE_URL)
+        print(f"✓ Using remote MCP server at {MCP_SERVER_BASE_URL}")
+
+    return _mcp_client
 
 
 def reset_mcp_server():
-    """Reset the MCP server with fresh data."""
-    global _mcp_server
-    if USE_DATABASE:
-        _mcp_server = FinanceMCPDatabase()
-    else:
-        _mcp_server = FinanceMCP(get_initial_data())
+    """Reset the MCP client, forcing re-creation on the next call to get_mcp_server."""
+    global _mcp_client
+    _mcp_client = RemoteMCPClient(MCP_SERVER_BASE_URL)
