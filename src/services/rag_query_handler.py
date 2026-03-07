@@ -12,7 +12,6 @@ from typing import Dict, List, Optional, Any
 from openai import OpenAI
 
 from src.services.narrative_vectorization import NarrativeRAGService
-from src.services.aggregation_service import AggregationService
 
 logger = logging.getLogger(__name__)
 
@@ -30,18 +29,15 @@ class RAGQueryHandler:
     def __init__(
         self, 
         narrative_rag_service: Optional[NarrativeRAGService] = None,
-        aggregation_service: Optional[AggregationService] = None,
         currency_symbol: str = "€"
     ):
         """Initialize the query handler.
         
         Args:
             narrative_rag_service: Narrative RAG service. If None, creates new one.
-            aggregation_service: Aggregation service for live queries. If None, creates new one.
             currency_symbol: Currency symbol to use in responses (default: €)
         """
         self.narrative_rag = narrative_rag_service or NarrativeRAGService()
-        self.aggregation_service = aggregation_service or AggregationService()
         self.currency_symbol = currency_symbol
         
         api_key = os.getenv("OPENAI_API_KEY")
@@ -54,8 +50,7 @@ class RAGQueryHandler:
         self.model = "gpt-4o-mini"
     
     def close(self):
-        """Close underlying services."""
-        self.aggregation_service.close()
+        """No-op: no resources to release."""
     
     def answer_query(
         self, 
@@ -90,10 +85,6 @@ class RAGQueryHandler:
             relevant_docs = self.narrative_rag.query(user_query, top_k=top_k)
             
             if not relevant_docs:
-                # Fallback: try to get live data if year/month specified
-                if year and month:
-                    return self._answer_with_live_data(user_query, year, month)
-                
                 return {
                     "query": user_query,
                     "answer": "I don't have enough information to answer this question. "
@@ -181,65 +172,6 @@ Based ONLY on the narratives above, answer the user's question. Be specific and 
             return {
                 "query": user_query,
                 "answer": f"An error occurred while processing your query: {str(e)}",
-                "sources": [],
-                "confidence": "none",
-                "error": str(e)
-            }
-    
-    def _answer_with_live_data(
-        self, 
-        user_query: str, 
-        year: int, 
-        month: int
-    ) -> Dict[str, Any]:
-        """Fallback: answer using live SQL data when no narratives available.
-        
-        Args:
-            user_query: User's question
-            year: Year
-            month: Month
-            
-        Returns:
-            Dict with answer and sources
-        """
-        try:
-            logger.info(f"No narratives found, using live SQL data for {year}-{month}")
-            
-            # Get live data from SQL
-            totals = self.aggregation_service.get_monthly_totals(year, month)
-            net_worth = self.aggregation_service.get_net_worth(year, month)
-            
-            # Create a simple answer
-            from datetime import datetime
-            month_name = datetime(year, month, 1).strftime("%B")
-            
-            answer = (
-                f"Based on live data for {month_name} {year}: "
-                f"Total income was {self.currency_symbol}{totals['total_income']:.2f}, "
-                f"total expenses were {self.currency_symbol}{abs(totals['total_expense']):.2f}, "
-                f"resulting in net savings of {self.currency_symbol}{totals['net_savings']:.2f}. "
-                f"Net worth was {self.currency_symbol}{net_worth:.2f}."
-            )
-            
-            return {
-                "query": user_query,
-                "answer": answer,
-                "sources": [{
-                    "type": "live_sql_query",
-                    "metadata": {
-                        "year": year,
-                        "month": month
-                    },
-                    "text_preview": "Live SQL aggregation"
-                }],
-                "confidence": "high",
-                "note": "Answer generated from live SQL data (no narratives available)"
-            }
-        except Exception as e:
-            logger.error(f"Error with live data fallback: {str(e)}")
-            return {
-                "query": user_query,
-                "answer": "I don't have enough information to answer this question.",
                 "sources": [],
                 "confidence": "none",
                 "error": str(e)
