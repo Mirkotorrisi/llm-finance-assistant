@@ -8,7 +8,7 @@ class TestRemoteMCPClientInterface:
     """Tests to verify RemoteMCPClient exposes the expected interface."""
 
     def _make_client(self):
-        from src.workflow.mcp_instance import RemoteMCPClient
+        from src.workflow.mcp_client import RemoteMCPClient
         return RemoteMCPClient("http://localhost:8000")
 
     def test_has_list_transactions_method(self):
@@ -56,7 +56,7 @@ class TestRemoteMCPClientHTTPCalls:
     """Tests verifying that RemoteMCPClient makes the correct HTTP calls."""
 
     def _make_client(self):
-        from src.workflow.mcp_instance import RemoteMCPClient
+        from src.workflow.mcp_client import RemoteMCPClient
         client = RemoteMCPClient("http://testserver")
         client.session = MagicMock()
         return client
@@ -173,7 +173,7 @@ class TestRemoteMCPClientHTTPCalls:
         assert result["year"] == 2026
 
     def test_base_url_trailing_slash_stripped(self):
-        from src.workflow.mcp_instance import RemoteMCPClient
+        from src.workflow.mcp_client import RemoteMCPClient
         client = RemoteMCPClient("http://testserver/")
         assert client.base_url == "http://testserver"
 
@@ -182,34 +182,34 @@ class TestMCPInstanceModule:
     """Tests for module-level helpers in mcp_instance."""
 
     def test_module_has_get_mcp_server(self):
-        import src.workflow.mcp_instance as mcp_instance
-        assert hasattr(mcp_instance, "get_mcp_server")
-        assert callable(mcp_instance.get_mcp_server)
+        import src.workflow.mcp_client as mcp_client
+        assert hasattr(mcp_client, "get_mcp_server")
+        assert callable(mcp_client.get_mcp_server)
 
     def test_module_has_reset_mcp_server(self):
-        import src.workflow.mcp_instance as mcp_instance
-        assert hasattr(mcp_instance, "reset_mcp_server")
-        assert callable(mcp_instance.reset_mcp_server)
+        import src.workflow.mcp_client as mcp_client
+        assert hasattr(mcp_client, "reset_mcp_server")
+        assert callable(mcp_client.reset_mcp_server)
 
     def test_get_mcp_server_returns_remote_client(self):
-        import src.workflow.mcp_instance as mcp_instance
-        from src.workflow.mcp_instance import RemoteMCPClient
+        import src.workflow.mcp_client as mcp_client
+        from src.workflow.mcp_client import RemoteMCPClient
         # Reset to force fresh creation
-        mcp_instance._mcp_client = None
-        client = mcp_instance.get_mcp_server()
+        mcp_client._mcp_client = None
+        client = mcp_client.get_mcp_server()
         assert isinstance(client, RemoteMCPClient)
 
     def test_get_mcp_server_returns_same_instance(self):
-        import src.workflow.mcp_instance as mcp_instance
-        mcp_instance._mcp_client = None
-        first = mcp_instance.get_mcp_server()
-        second = mcp_instance.get_mcp_server()
+        import src.workflow.mcp_client as mcp_client
+        mcp_client._mcp_client = None
+        first = mcp_client.get_mcp_server()
+        second = mcp_client.get_mcp_server()
         assert first is second
 
     def test_reset_mcp_server_creates_new_instance(self):
-        import src.workflow.mcp_instance as mcp_instance
-        mcp_instance._mcp_client = None
-        first = mcp_instance.get_mcp_server()
-        mcp_instance.reset_mcp_server()
-        second = mcp_instance.get_mcp_server()
+        import src.workflow.mcp_client as mcp_client
+        mcp_client._mcp_client = None
+        first = mcp_client.get_mcp_server()
+        mcp_client.reset_mcp_server()
+        second = mcp_client.get_mcp_server()
         assert first is not second

@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from src.models import Action, FinancialParameters, LLMNLUResponse
 from src.workflow.state import FinanceState
-from src.workflow.mcp_instance import get_mcp_server
+from src.workflow.mcp_client import get_mcp_server
 
 load_dotenv()
 
