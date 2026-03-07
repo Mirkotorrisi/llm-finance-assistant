@@ -72,7 +72,6 @@ llm-finance-assistant/
 │   ├── api/               # FastAPI application
 │   │   └── app.py         # API endpoints and WebSocket handler
 │   ├── services/          # File processing and RAG services
-│   ├── main_cli.py        # CLI entry point
 │   └── main_api.py        # API server entry point
 └── README.md
 ```

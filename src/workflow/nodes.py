@@ -3,7 +3,6 @@
 import datetime
 import json
 import os
-import sys
 from typing import Dict
 import speech_recognition as sr
 from openai import OpenAI
@@ -16,7 +15,7 @@ from src.workflow.mcp_instance import get_mcp_server
 load_dotenv()
 
 # Global Debug Flag
-DEBUG_MODE = "--debug" in sys.argv
+DEBUG_MODE = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
 
 # Lazy client initialization
 _client = None
