@@ -119,31 +119,6 @@ class UploadStatementResponse(BaseModel):
     transactions: list
 
 
-class MonthlyDataResponse(BaseModel):
-    """Response model for monthly data in financial data endpoint."""
-    month: str  # "Jan", "Feb", etc.
-    netWorth: float
-    expenses: float
-    income: float
-    net: float
-
-
-class AccountBreakdownResponse(BaseModel):
-    """Response model for account breakdown in financial data endpoint."""
-    liquidity: float
-    investments: float
-    otherAssets: float
-
-
-class FinancialDataResponse(BaseModel):
-    """Response model for financial data endpoint."""
-    year: int
-    currentNetWorth: float
-    netSavings: float
-    monthlyData: List[MonthlyDataResponse]
-    accountBreakdown: AccountBreakdownResponse
-
-
 @app.get("/")
 async def root():
     """Root endpoint."""
@@ -158,7 +133,6 @@ async def root():
             "search_transactions": "/api/transactions/search (POST) - RAG semantic search",
             "balance": "/api/balance (GET)",
             "upload_statement": "/statements/upload (POST)",
-            "financial_data": "/api/financial-data/{year} (GET)",
             "v2_narrative_generate": "/api/v2/narratives/generate (POST) - Generate narrative summaries",
             "v2_narrative_chat": "/api/v2/chat (POST) - RAG-based conversational query",
             "v2_narrative_stats": "/api/v2/narratives/stats (GET) - Vector store statistics"

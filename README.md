@@ -113,37 +113,6 @@ llm-finance-assistant/
 
 ## Usage
 
-### Command Line Interface (CLI)
-
-Run the assistant in interactive mode:
-
-```bash
-python -m src.main_cli
-```
-
-#### CLI Commands Examples
-
-- **Queries**: "How much did I spend on food this week?"
-- **Additions**: "I spent 15.50 on a bus ticket today"
-- **Deletions**: "Delete transaction 4"
-- **Balance**: "What is my current total balance?"
-
-#### Audio Simulation
-
-To simulate audio input (transcribing a `.wav` file):
-
-```text
-You: audio:path/to/voice_note.wav
-```
-
-#### Debug Mode
-
-To inspect the LLM's reasoning prompts and MCP data output:
-
-```bash
-python -m src.main_cli --debug
-```
-
 ### REST API and WebSocket
 
 Start the FastAPI server:
@@ -222,21 +191,6 @@ Once the server is running, visit:
    ```
    
    Uses semantic search (RAG) to find transactions matching natural language queries.
-   
-   Example response:
-   ```json
-   {
-     "query": "food and grocery expenses last month",
-     "results": [
-       {
-         "transaction": {"date": "2026-01-15", "description": "Walmart grocery", ...},
-         "text": "Date: 2026-01-15, Description: Walmart grocery, ...",
-         "similarity": 0.89
-       }
-     ],
-     "total_in_store": 150
-   }
-   ```
 
 6. **Chat (REST)**
    ```
@@ -270,15 +224,6 @@ Connect to the WebSocket endpoint at `ws://localhost:8000/ws/chat`
 {
   "message": "Show me my food expenses",
   "is_audio": false
-}
-```
-
-**Send message (audio)**:
-```json
-{
-  "message": "audio query",
-  "is_audio": true,
-  "audio_data": "<base64-encoded WAV file>"
 }
 ```
 
@@ -316,32 +261,9 @@ with open("statement.csv", "rb") as f:
     # Output: {"success": true, "transactions_added": 5, ...}
 ```
 
-### Using WebSocket with Python
-
-```python
-import asyncio
-import websockets
-import json
-
-async def chat():
-    uri = "ws://localhost:8000/ws/chat"
-    async with websockets.connect(uri) as websocket:
-        # Send message
-        await websocket.send(json.dumps({
-            "message": "What is my balance?",
-            "is_audio": False
-        }))
-        
-        # Receive response
-        response = await websocket.recv()
-        print(json.loads(response))
-
-asyncio.run(chat())
-```
-
 ### Bank Statement Upload Format
 
-The `/statements/upload` endpoint accepts bank statements in CSV, Excel (XLS/XLSX), or PDF format. For best results, ensure your files contain the following columns (names are case-insensitive):
+The `/statements/upload` endpoint accepts bank statements in CSV, Excel (XLS/XLSX), or PDF format.
 
 #### CSV/Excel Format
 
@@ -361,17 +283,10 @@ date,description,amount,currency,category
 
 #### PDF Format
 
-PDF files are parsed to extract text, and the system attempts to identify transactions using pattern matching. For best results, PDF statements should contain:
+PDF files are parsed to extract text. For best results, PDF statements should contain:
 - Date in format: DD/MM/YYYY or MM/DD/YYYY or YYYY-MM-DD
 - Clear transaction descriptions
 - Amounts with currency symbols ($, €, £) or numeric values
-
-#### Features
-
-- **Automatic duplicate detection**: The system checks if a transaction already exists (based on date, amount, and description) before adding it
-- **Smart categorization**: Transactions are automatically categorized into: food, transport, shopping, utilities, rent, income, or other
-- **Currency support**: Supports USD, EUR, GBP, JPY with automatic extraction from transaction data
-- **Error handling**: Clear error messages for unsupported formats or oversized files (max 10 MB)
 
 ## Development
 
@@ -381,23 +296,6 @@ Run unit tests with pytest:
 
 ```bash
 python -m pytest tests/ -v
-```
-
-The application structure supports easy testing. You can test individual components:
-
-```python
-# Test business logic
-from src.business_logic import FinanceMCP, get_initial_data
-
-mcp = FinanceMCP(get_initial_data())
-balance = mcp.get_balance()
-print(f"Balance: {balance}")
-
-# Test models
-from src.models import Action, FinancialParameters
-
-params = FinancialParameters(category="food", amount=-50.0)
-print(params.model_dump())
 ```
 
 ### Module Structure
