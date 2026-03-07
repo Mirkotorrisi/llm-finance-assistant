@@ -215,10 +215,11 @@ Once the server is running, visit:
    
    Features:
    - **LLM-based PDF parsing**: Intelligently extracts transactions from bank statement PDFs using OpenAI
-   - **Automatic duplicate detection**: Skips already existing transactions
+   - **Automatic duplicate detection**: Skips already existing transactions (checked via MCP client)
    - **Smart categorization**: Uses LLM to assign appropriate categories to transactions
    - **Currency support**: Extracts from data or defaults to EUR
-   - **RAG integration**: Transactions are automatically added to vector store for semantic search
+   - **MCP client persistence**: Parsed and deduplicated transactions are bulk-added via the MCP client (`get_mcp_client()`), which delegates to the configured MCP server (local or remote)
+   - **RAG integration**: Transactions are automatically added to the in-memory vector store for semantic search
    
    Example response:
    ```json
@@ -244,6 +245,9 @@ Once the server is running, visit:
    ```
    
    Uses semantic search (RAG) to find transactions matching natural language queries.
+   Transactions are embedded with OpenAI `text-embedding-3-small` and stored in an in-memory
+   vector store (populated at upload time). No changes to this endpoint are required when
+   switching to a remote MCP server—the RAG vector store remains local to the agent.
    
    Example response:
    ```json
@@ -518,7 +522,12 @@ FastAPI application with:
 The services module handles bank statement uploads:
 - **FileProcessor**: Validates file formats/sizes and extracts raw data from PDF, Excel, and CSV files
 - **TransactionParser**: Uses LLM (GPT-4o-mini) to intelligently parse PDFs and categorize transactions
-- **RAGService**: In-memory vector store for semantic transaction search using embeddings
+- **RAGService**: In-memory vector store for semantic transaction search using OpenAI embeddings
+
+Transaction persistence in the upload flow uses `get_mcp_client()` from `src/workflow/__init__.py`,
+which currently delegates to the local MCP server instance. When the agent is refactored to call a
+remote MCP server (`finance-assistant-api`), only the `get_mcp_client()` implementation needs to
+change—the upload endpoint and services remain unchanged.
 
 ## Contributing
 
