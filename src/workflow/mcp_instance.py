@@ -1,61 +1,101 @@
 """Global MCP server instance management."""
 
-import os
-from src.business_logic import FinanceMCP, get_initial_data
-
-# Check if database should be used
-USE_DATABASE = os.getenv("USE_DATABASE", "true").lower() == "true"
-
-# Try to import database MCP, fall back to in-memory if not available
-if USE_DATABASE:
-    try:
-        from src.business_logic.mcp_database import FinanceMCPDatabase
-        from src.database.init import init_database
-        _database_initialized = False
-    except ImportError:
-        USE_DATABASE = False
-        print("Warning: Database modules not available, using in-memory storage")
+import datetime
+from typing import List, Optional
 
 # Global MCP instance
 _mcp_server = None
 
 
-def get_mcp_server():
-    """Get the global MCP server instance.
-    
-    Returns:
-        The MCP server instance (database-backed or in-memory)
+class FinanceMCP:
+    """Simple in-memory MCP server for personal finance transactions.
+
+    Acts as a lightweight client-side store until all persistence is
+    delegated to finance-assistant-api.
     """
-    global _mcp_server, _database_initialized
-    
+
+    def __init__(self):
+        self.transactions: List[dict] = []
+        self.next_id: int = 1
+
+    def list_transactions(
+        self,
+        category: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[dict]:
+        """List transactions with optional filters."""
+        results = self.transactions
+        if category:
+            results = [t for t in results if t["category"].lower() == category.lower()]
+        if start_date:
+            results = [t for t in results if t["date"] >= start_date]
+        if end_date:
+            results = [t for t in results if t["date"] <= end_date]
+        return results
+
+    def add_transaction(
+        self,
+        amount: float,
+        category: str,
+        description: str,
+        date: Optional[str] = None,
+        currency: Optional[str] = None,
+    ) -> dict:
+        """Add a new transaction."""
+        if not date:
+            date = datetime.date.today().isoformat()
+        new_entry: dict = {
+            "id": self.next_id,
+            "date": date,
+            "amount": amount,
+            "category": category,
+            "description": description,
+        }
+        if currency:
+            new_entry["currency"] = currency
+        self.transactions.append(new_entry)
+        self.next_id += 1
+        return new_entry
+
+    def add_transactions_bulk(self, transactions: List[dict]) -> List[dict]:
+        """Add multiple transactions at once."""
+        return [
+            self.add_transaction(
+                amount=t["amount"],
+                category=t["category"],
+                description=t["description"],
+                date=t.get("date"),
+                currency=t.get("currency"),
+            )
+            for t in transactions
+        ]
+
+    def delete_transaction(self, transaction_id: int) -> bool:
+        """Delete a transaction by ID."""
+        original_count = len(self.transactions)
+        self.transactions = [t for t in self.transactions if t.get("id") != transaction_id]
+        return len(self.transactions) < original_count
+
+    def get_balance(self) -> float:
+        """Get the current balance (sum of all transaction amounts)."""
+        return sum(t["amount"] for t in self.transactions)
+
+    def get_existing_categories(self) -> List[str]:
+        """Get a sorted list of unique category names."""
+        return sorted({t["category"] for t in self.transactions if t.get("category")})
+
+
+def get_mcp_server() -> FinanceMCP:
+    """Get the global MCP server instance."""
+    global _mcp_server
     if _mcp_server is None:
-        if USE_DATABASE:
-            # Initialize database if not already done
-            if not _database_initialized:
-                try:
-                    init_database()
-                    _database_initialized = True
-                except Exception as e:
-                    print(f"Warning: Failed to initialize database: {e}")
-                    print("Falling back to in-memory storage")
-                    _mcp_server = FinanceMCP(get_initial_data())
-                    return _mcp_server
-            
-            # Use database-backed MCP
-            _mcp_server = FinanceMCPDatabase()
-            print("✓ Using database-backed transaction storage")
-        else:
-            # Use in-memory MCP
-            _mcp_server = FinanceMCP(get_initial_data())
-            print("✓ Using in-memory transaction storage")
-    
+        _mcp_server = FinanceMCP()
+        print("✓ Using in-memory transaction storage")
     return _mcp_server
 
 
-def reset_mcp_server():
-    """Reset the MCP server with fresh data."""
+def reset_mcp_server() -> None:
+    """Reset the MCP server, discarding all in-memory transactions."""
     global _mcp_server
-    if USE_DATABASE:
-        _mcp_server = FinanceMCPDatabase()
-    else:
-        _mcp_server = FinanceMCP(get_initial_data())
+    _mcp_server = FinanceMCP()

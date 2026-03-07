@@ -13,31 +13,19 @@ def mock_narrative_rag():
 
 
 @pytest.fixture
-def mock_aggregation_service():
-    """Create a mock AggregationService."""
-    return MagicMock()
-
-
-@pytest.fixture
-def query_handler(mock_narrative_rag, mock_aggregation_service):
-    """Create a RAGQueryHandler with mocked services."""
-    with patch('src.services.rag_query_handler.NarrativeRAGService', return_value=mock_narrative_rag), \
-         patch('src.services.rag_query_handler.AggregationService', return_value=mock_aggregation_service):
-        handler = RAGQueryHandler(
-            narrative_rag_service=mock_narrative_rag,
-            aggregation_service=mock_aggregation_service
-        )
+def query_handler(mock_narrative_rag):
+    """Create a RAGQueryHandler with mocked NarrativeRAGService."""
+    with patch('src.services.rag_query_handler.NarrativeRAGService', return_value=mock_narrative_rag):
+        handler = RAGQueryHandler(narrative_rag_service=mock_narrative_rag)
         yield handler
         handler.close()
 
 
 def test_query_handler_initialization():
     """Test RAGQueryHandler initialization."""
-    with patch('src.services.rag_query_handler.NarrativeRAGService'), \
-         patch('src.services.rag_query_handler.AggregationService'):
+    with patch('src.services.rag_query_handler.NarrativeRAGService'):
         handler = RAGQueryHandler()
         assert handler.narrative_rag is not None
-        assert handler.aggregation_service is not None
         handler.close()
 
 
@@ -51,7 +39,7 @@ def test_answer_query_no_client(query_handler):
     assert "error" in result
 
 
-def test_answer_query_no_documents(query_handler, mock_narrative_rag, mock_aggregation_service):
+def test_answer_query_no_documents(query_handler, mock_narrative_rag):
     """Test answer_query when no relevant documents found."""
     # Mock OpenAI client
     mock_client = MagicMock()
@@ -65,30 +53,6 @@ def test_answer_query_no_documents(query_handler, mock_narrative_rag, mock_aggre
     assert result["confidence"] == "none"
     assert len(result["sources"]) == 0
     assert "don't have enough information" in result["answer"]
-
-
-def test_answer_query_with_live_data(query_handler, mock_narrative_rag, mock_aggregation_service):
-    """Test answer_query fallback to live data."""
-    # Mock OpenAI client
-    mock_client = MagicMock()
-    query_handler.client = mock_client
-    
-    # Mock empty query results
-    mock_narrative_rag.query.return_value = []
-    
-    # Mock live data
-    mock_aggregation_service.get_monthly_totals.return_value = {
-        "total_income": 5000.0,
-        "total_expense": 3000.0,
-        "net_savings": 2000.0
-    }
-    mock_aggregation_service.get_net_worth.return_value = 50000.0
-    
-    result = query_handler.answer_query("test query", year=2026, month=3)
-    
-    assert result["confidence"] == "high"
-    assert "March 2026" in result["answer"]
-    assert len(result["sources"]) > 0
 
 
 def test_answer_query_with_documents(query_handler, mock_narrative_rag):
@@ -262,3 +226,9 @@ def test_answer_query_error_handling(query_handler, mock_narrative_rag):
     assert result["confidence"] == "none"
     assert "error" in result
     assert "API Error" in result["error"]
+
+
+def test_close_is_noop(query_handler):
+    """Test that close() does not raise."""
+    query_handler.close()
+
