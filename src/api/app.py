@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.models import Action, FinancialParameters, UserInput
-from src.workflow import create_assistant_graph, get_mcp_server
+from src.workflow import create_assistant_graph, get_mcp_server, get_mcp_client
 from src.workflow.state import FinanceState
 from src.services import FileProcessor, FileValidationError, TransactionParser, RAGService
 from src.api.endpoints_narrative_rag import router as narrative_rag_router
@@ -222,9 +222,9 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
             logger.error(f"File validation error: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
         
-        # Get existing categories from MCP server
-        mcp_server = get_mcp_server()
-        existing_categories = mcp_server.get_existing_categories()
+        # Get existing categories from MCP client for LLM-assisted categorization
+        mcp_client = get_mcp_client()
+        existing_categories = mcp_client.get_existing_categories()
         
         logger.info(f"Found {len(existing_categories)} existing categories: {existing_categories}")
         
@@ -245,12 +245,12 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
                 transactions=[]
             )
         
-        # Remove duplicates
-        existing_transactions = mcp_server.list_transactions()
+        # Remove duplicates against transactions already stored in the MCP client
+        existing_transactions = mcp_client.list_transactions()
         unique_transactions = TransactionParser.remove_duplicates(transactions, existing_transactions)
         
-        # Add transactions to the system
-        added_transactions = mcp_server.add_transactions_bulk(unique_transactions)
+        # Persist unique transactions via MCP client (bulk add)
+        added_transactions = mcp_client.add_transactions_bulk(unique_transactions)
         
         # Add to RAG vector store for semantic search
         try:
