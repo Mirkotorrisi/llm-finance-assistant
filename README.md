@@ -405,22 +405,19 @@ Run unit tests with pytest:
 python -m pytest tests/ -v
 ```
 
-The application structure supports easy testing. You can test individual components:
+The test suite targets the agent client architecture and covers:
 
-```python
-# Test business logic
-from src.business_logic import FinanceMCP, get_initial_data
-
-mcp = FinanceMCP(get_initial_data())
-balance = mcp.get_balance()
-print(f"Balance: {balance}")
-
-# Test models
-from src.models import Action, FinancialParameters
-
-params = FinancialParameters(category="food", amount=-50.0)
-print(params.model_dump())
-```
+| Test file | What it covers |
+|---|---|
+| `test_agent_workflow.py` | LangGraph graph creation, ASR / NLU / query / generator nodes |
+| `test_websocket_chat.py` | WebSocket connection, text messages, error handling |
+| `test_file_processor.py` | File validation, CSV/PDF extraction |
+| `test_transaction_parser.py` | Date/amount parsing, categorization, duplicate removal |
+| `test_llm_pdf_parsing.py` | LLM-based PDF statement parsing |
+| `test_rag_service.py` | In-memory RAG vector store for semantic search |
+| `test_narrative_rag.py` | Narrative RAG document management and querying |
+| `test_integration.py` | End-to-end REST API including file upload |
+| `test_rag_search.py` | Semantic search REST endpoint |
 
 ### Module Structure
 
