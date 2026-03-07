@@ -1,6 +1,6 @@
 # Multimodal Personal Finance Assistant
 
-A professional, self-contained virtual assistant for managing personal finances. This application allows users to interact via text or voice, perform complex queries on their financial data, and manage transactions through both a CLI and a REST API with WebSocket support.
+A professional, self-contained virtual assistant for managing personal finances. This application allows users to interact via text or voice, perform complex queries on their financial data, and manage transactions through a REST API with WebSocket support.
 
 ## Features
 
@@ -15,7 +15,6 @@ A professional, self-contained virtual assistant for managing personal finances.
 - **PostgreSQL Persistence**: Optional database-backed storage with automatic table creation in development mode.
 - **State Management**: Built with `LangGraph` to manage conversational history and execution nodes.
 - **REST API & WebSocket**: FastAPI-based API for programmatic access and real-time chat via WebSocket.
-- **Debug Mode**: Includes a specialized logging mode to inspect LLM reasonings and system prompts.
 
 ## Data Model
 
@@ -66,14 +65,12 @@ llm-finance-assistant/
 │   │   └── domain.py      # Domain models (Action, Parameters, etc.)
 │   ├── api/               # FastAPI application
 │   │   └── app.py         # API endpoints and WebSocket handler
-│   ├── main_cli.py        # CLI entry point
 │   └── main_api.py        # API server entry point
 ├── scripts/               # Utility scripts
 │   ├── seed_database.py   # Database seeding script
 │   └── demo_monthly_model.py # Monthly model demonstration
 ├── docs/                  # Documentation
 │   └── MONTHLY_DATA_MODEL.md # Monthly data model documentation
-├── finance_assistant.py   # Original monolithic file (deprecated)
 └── README.md
 ```
 
@@ -134,37 +131,6 @@ llm-finance-assistant/
       ```
 
 ## Usage
-
-### Command Line Interface (CLI)
-
-Run the assistant in interactive mode:
-
-```bash
-python -m src.main_cli
-```
-
-#### CLI Commands Examples
-
-- **Queries**: "How much did I spend on food this week?"
-- **Additions**: "I spent 15.50 on a bus ticket today"
-- **Deletions**: "Delete transaction 4"
-- **Balance**: "What is my current total balance?"
-
-#### Audio Simulation
-
-To simulate audio input (transcribing a `.wav` file):
-
-```text
-You: audio:path/to/voice_note.wav
-```
-
-#### Debug Mode
-
-To inspect the LLM's reasoning prompts and MCP data output:
-
-```bash
-python -m src.main_cli --debug
-```
 
 ### REST API and WebSocket
 
