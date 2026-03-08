@@ -1,22 +1,19 @@
-"""Statement upload and ingestion endpoints."""
+"""Statement upload and ingestion endpoints - REFACTORED for MCP."""
 
 import io
 import logging
-
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from src.api.dependencies import rag_service
-from src.api.models import UploadStatementResponse
+from src.models import UploadStatementResponse
 from src.services import FileProcessor, FileValidationError, TransactionParser
-from src.workflow import get_mcp_client
+from src.workflow.mcp_client import get_mcp_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/statements", tags=["statements"])
 
-
 @router.post("/upload")
 async def upload_statement(file: UploadFile = File(...)) -> UploadStatementResponse:
-    """Upload and process a bank statement file."""
+    """Upload and process a bank statement file using Remote MCP Tools."""
     try:
         file_content = await file.read()
         file_size = len(file_content)
@@ -33,10 +30,14 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
             logger.error(f"File validation error: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
 
-        mcp_client = get_mcp_client()
-        existing_categories = mcp_client.get_existing_categories()
+        mcp_client = await get_mcp_client()
 
-        logger.info(f"Found {len(existing_categories)} existing categories: {existing_categories}")
+        #TODO: We should get categories from the MCP server from a dedicated tool
+        raw_transactions_data = await mcp_client.call_tool("list_transactions", {})
+        
+        existing_categories = sorted({
+            t["category"] for t in raw_transactions_data if t.get("category")
+        })
 
         transactions = TransactionParser.parse_transactions(
             extracted_data,
@@ -54,16 +55,15 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
                 transactions=[],
             )
 
-        existing_transactions = mcp_client.list_transactions()
-        unique_transactions = TransactionParser.remove_duplicates(transactions, existing_transactions)
+        unique_transactions = TransactionParser.remove_duplicates(
+            transactions, 
+            raw_transactions_data
+        )
 
-        added_transactions = mcp_client.add_transactions_bulk(unique_transactions)
-
-        try:
-            rag_service.add_transactions(added_transactions)
-            logger.info(f"Added {len(added_transactions)} transactions to RAG vector store")
-        except Exception as e:
-            logger.warning(f"Failed to add transactions to RAG store (non-critical): {str(e)}")
+        added_transactions = await mcp_client.call_tool(
+            "add_transactions_bulk", 
+            {"transactions": unique_transactions}
+        )
 
         logger.info(
             f"Statement upload completed: {len(added_transactions)} transactions added, "
@@ -79,8 +79,6 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
             transactions=added_transactions,
         )
 
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Unexpected error processing file: {str(e)}")
+        logger.error(f"Unexpected error processing file: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")

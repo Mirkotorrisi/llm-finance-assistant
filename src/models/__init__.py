@@ -6,10 +6,12 @@ from src.models.domain import (
     UserInput,
     LLMNLUResponse
 )
+from src.models.statements import UploadStatementResponse
 
 __all__ = [
     "Action",
     "FinancialParameters",
     "UserInput",
-    "LLMNLUResponse"
+    "LLMNLUResponse",
+    "UploadStatementResponse",
 ]

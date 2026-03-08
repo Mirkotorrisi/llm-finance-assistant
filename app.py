@@ -1,24 +1,30 @@
 """FastAPI application bootstrap for the finance assistant."""
 
+from contextlib import asynccontextmanager
 import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import (
-    chat_router,
-    core_router,
-    finance_router,
-    statements_router,
-)
+from src.routes.chat import router as chat_router
+from src.routes.core import router as core_router
+
+from src.workflow.mcp_client import get_mcp_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    client = await get_mcp_client()
+    yield
+    await client.disconnect() # Ensure we cleanly disconnect from the MCP server on shutdown
 
 app = FastAPI(
     title="Finance Assistant API",
     description="A multimodal finance assistant supporting text and audio interactions",
     version="1.0.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -30,6 +36,4 @@ app.add_middleware(
 )
 
 app.include_router(core_router)
-app.include_router(finance_router)
-app.include_router(statements_router)
 app.include_router(chat_router)

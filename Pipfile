@@ -9,7 +9,6 @@ langgraph = "*"
 speechrecognition = "*"
 openai = "*"
 python-dotenv = "*"
-fastapi = "*"
 uvicorn = {extras = ["standard"], version = "*"}
 websockets = "*"
 pypdf2 = "*"
@@ -19,8 +18,11 @@ python-multipart = ">=0.0.18"
 alembic = "*"
 sqlalchemy = "*"
 psycopg2-binary = "*"
+mcp = "*"
+fastapi = "*"
 
 [dev-packages]
+pytest = "*"
 
 [requires]
 python_version = "3.13"

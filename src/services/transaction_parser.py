@@ -426,7 +426,6 @@ Extract all transactions and format them as specified."""
     def parse_row(
         row: Dict[str, Any], 
         existing_categories: Optional[List[str]] = None,
-        use_llm_categorization: bool = True,
         openai_client: Optional[OpenAI] = None
     ) -> Optional[Dict[str, Any]]:
         """Parse a single row into transaction format.
@@ -434,7 +433,6 @@ Extract all transactions and format them as specified."""
         Args:
             row: Raw data row
             existing_categories: List of existing category labels (for LLM categorization)
-            use_llm_categorization: Whether to use LLM for categorization (default: True)
             openai_client: Optional OpenAI client instance
             
         Returns:
@@ -509,13 +507,9 @@ Extract all transactions and format them as specified."""
                     break
         
         if not category:
-            # Use LLM categorization if enabled
-            if use_llm_categorization:
-                category = TransactionParser.categorize_transaction_with_llm(
-                    description, amount, existing_categories, openai_client
-                )
-            else:
-                category = TransactionParser.categorize_transaction(description, amount)
+            category = TransactionParser.categorize_transaction_with_llm(
+                description, amount, existing_categories, openai_client
+            )
         
         return {
             "date": date,
@@ -528,15 +522,13 @@ Extract all transactions and format them as specified."""
     @staticmethod
     def parse_transactions(
         rows: List[Dict[str, Any]], 
-        existing_categories: Optional[List[str]] = None,
-        use_llm_categorization: bool = True
+        existing_categories: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """Parse multiple rows into transactions.
         
         Args:
             rows: List of raw data rows
             existing_categories: List of existing category labels (for LLM categorization)
-            use_llm_categorization: Whether to use LLM for categorization (default: True)
             
         Returns:
             List of parsed transactions
@@ -558,15 +550,13 @@ Extract all transactions and format them as specified."""
         
         # Create a single OpenAI client to reuse across all transactions
         openai_client = None
-        if use_llm_categorization:
-            openai_client = TransactionParser._get_openai_client()
+        openai_client = TransactionParser._get_openai_client()
         
         for i, row in enumerate(rows):
             try:
                 transaction = TransactionParser.parse_row(
                     row, 
                     existing_categories=existing_categories,
-                    use_llm_categorization=use_llm_categorization,
                     openai_client=openai_client
                 )
                 if transaction:

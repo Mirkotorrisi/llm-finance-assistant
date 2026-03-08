@@ -1,211 +1,121 @@
-"""LangGraph nodes for the finance assistant workflow."""
-
 import datetime
 import json
 import os
 from typing import Dict
 import speech_recognition as sr
-from openai import OpenAI
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 from src.models import Action, FinancialParameters, LLMNLUResponse
 from src.workflow.state import FinanceState
-from src.workflow.mcp_client import get_mcp_server
+
+from src.workflow.mcp_client import get_mcp_client 
 
 load_dotenv()
 
-# Global Debug Flag
-DEBUG_MODE = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
-
-# Lazy client initialization
-_client = None
-
+# Lazy client initialization (Async)
+_async_client = None
 
 def get_openai_client():
-    """Get or create OpenAI client."""
-    global _client
-    if _client is None:
-        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    return _client
+    global _async_client
+    if _async_client is None:
+        _async_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _async_client
 
 
-def asr_node(state: FinanceState) -> Dict:
-    """Automatic Speech Recognition node.
-    
-    Transcribes audio input to text or passes through text input.
-    
-    Args:
-        state: Current workflow state
-        
-    Returns:
-        Dictionary with transcription
-    """
+
+async def asr_node(state: FinanceState) -> Dict:
+    """Automatic Speech Recognition Node: Recognize speech if input is audio, otherwise pass text through."""
     user_input = state["input"]
+    transcription = ""
+    
     if user_input.is_audio:
         recognizer = sr.Recognizer()
         try:
-            # Note: user_input.text contains path to temporary audio file when is_audio is True
             with sr.AudioFile(user_input.text) as source:
                 audio = recognizer.record(source)
             transcription = recognizer.recognize_google(audio)
         except Exception as e:
             print(f"--- ASR Error: {e} ---")
-            transcription = ""
     else:
         transcription = user_input.text
+        
     return {"transcription": transcription}
 
 
-def nlu_node(state: FinanceState) -> Dict:
-    """Natural Language Understanding node.
-    
-    Extracts user intent and parameters from transcribed text using LLM.
-    
-    Args:
-        state: Current workflow state
-        
-    Returns:
-        Dictionary with action and parameters
-    """
+async def nlu_node(state: FinanceState) -> Dict:
+    """Natural Language Understanding Node: Extract intent and parameters using an LLM."""
     text = state["transcription"]
     if not text:
         return {"action": Action.UNKNOWN, "parameters": FinancialParameters()}
 
     today = datetime.date.today().isoformat()
-    monday = (datetime.date.today() - datetime.timedelta(days=datetime.date.today().weekday())).isoformat()
-
-    system_prompt = f"""
-You are an NLU engine for a personal finance assistant.
-Today's date is {today}. The current week started on Monday {monday}.
-Extract the user's intended action and parameters.
-
-Actions:
-- list: For querying transactions (by category, date range, or all).
-- add: For adding a new transaction. (Requires amount, category, description). 
-       Note: Spending should be negative amounts, income positive.
-- delete: For removing a transaction (requires an ID).
-- balance: For checking the current total balance.
-
-Parameters:
-- category: Any string (e.g., 'food', 'salary', 'fun').
-- start_date / end_date: ISO 8601 format (YYYY-MM-DD). Resolve relative terms like 'this week', 'last 3 days', 'yesterday' based on {today}.
-- amount: Float.
-- description: String.
-- transaction_id: Integer if specified.
-
-Respond ONLY in valid JSON matching the schema.
-"""
-    user_prompt = f"User input: {text}"
-
-    if DEBUG_MODE:
-        print("\n[DEBUG] NLU - System Prompt:", system_prompt)
-        print("[DEBUG] NLU - User Prompt:", user_prompt)
-
+    
+    system_prompt = f"You are an NLU engine... Today is {today}." 
+    
+    client = get_openai_client()
     try:
-        client = get_openai_client()
-        completion = client.chat.completions.create(
+        completion = await client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=[{"role": "system", "content": system_prompt},
+                      {"role": "user", "content": f"User input: {text}"}],
             response_format={"type": "json_object"},
             temperature=0
         )
-        raw_response = completion.choices[0].message.content
-        if DEBUG_MODE:
-            print("[DEBUG] NLU - Raw Response:", raw_response)
-            
-        parsed = LLMNLUResponse.model_validate_json(raw_response)
-        action = parsed.action
-        params = parsed.parameters
+        parsed = LLMNLUResponse.model_validate_json(completion.choices[0].message.content)
+        return {"action": parsed.action, "parameters": parsed.parameters}
     except Exception as e:
         print(f"--- NLU Error: {e} ---")
-        action = Action.UNKNOWN
-        params = FinancialParameters()
-
-    print(f"--- LLM NLU: Action={action.value}, Params={params.model_dump(exclude_none=True)} ---")
-    return {"action": action, "parameters": params}
+        return {"action": Action.UNKNOWN, "parameters": FinancialParameters()}
 
 
-def query_node(state: FinanceState) -> Dict:
-    """Query execution node.
-    
-    Executes the requested action on the MCP server.
-    
-    Args:
-        state: Current workflow state
-        
-    Returns:
-        Dictionary with query results
-    """
-    mcp_server = get_mcp_server()
+async def query_node(state: FinanceState) -> Dict:
+    """Query Node: Calls the appropriate tool on the MCP server based on the extracted action and parameters."""
+    mcp_client = await get_mcp_client()
     action = state["action"]
-    params = state["parameters"]
-    results = None
-
-    if action == Action.LIST:
-        results = mcp_server.list_transactions(params.category, params.start_date, params.end_date)
-    elif action == Action.ADD:
-        if params.amount is not None and params.category and params.description:
-            results = mcp_server.add_transaction(params.amount, params.category, params.description)
-        else:
-            results = {"error": "Missing parameters (amount, category, or description) for adding transaction"}
-    elif action == Action.DELETE:
-        if params.transaction_id:
-            results = mcp_server.delete_transaction(params.transaction_id)
-        else:
-            results = {"error": "Transaction ID required for deletion"}
-    elif action == Action.BALANCE:
-        results = mcp_server.get_balance()
+    params = state["parameters"].model_dump(exclude_none=True)
     
-    return {"query_results": results}
+    mapping = {
+        Action.LIST: "list_transactions",
+        Action.ADD: "add_transaction",
+        Action.DELETE: "delete_transaction",
+        Action.BALANCE: "get_balance"
+    }
+    
+    tool_name = mapping.get(action)
+    if not tool_name:
+        return {"query_results": {"error": "Unknown action, cannot map to tool."}}
+
+    try:
+        results = await mcp_client.call_tool(tool_name, params)
+        return {"query_results": results}
+    except Exception as e:
+        return {"query_results": {"error": str(e)}}
 
 
-def generator_node(state: FinanceState) -> Dict:
-    """Response generation node.
+async def generator_node(state: FinanceState) -> Dict:
+    """Naturale Language Generator Node: Creates the final response using the obtained data."""
+    mcp_client = await get_mcp_client()
     
-    Generates a natural language response based on query results using LLM.
-    
-    Args:
-        state: Current workflow state
-        
-    Returns:
-        Dictionary with response and updated history
-    """
-    mcp_server = get_mcp_server()
-    results = state["query_results"]
-    action = state["action"]
+    # We can make an extra call via MCP to always have the updated balance in the context
+    current_balance = await mcp_client.call_tool("get_balance", {})
     
     current_context = {
-        "action": action,
-        "parameters": state["parameters"].model_dump(exclude_none=True),
-        "results": results,
-        "current_balance": mcp_server.get_balance(),
+        "action": state["action"],
+        "results": state["query_results"],
+        "current_balance": current_balance,
         "today": datetime.date.today().isoformat()
     }
 
-    system_instr = "You are a professional personal finance assistant. Generate a clear, friendly, and professional response based on the provided data. If an entry was added or deleted, confirm the action and show the new balance. If querying, summarize the findings naturally."
-    user_instr = f"User request: {state['transcription']}\nContext Data: {json.dumps(current_context)}"
-
-    if DEBUG_MODE:
-        print("\n[DEBUG] Generator - System Instruction:", system_instr)
-        print("[DEBUG] Generator - User Instruction:", user_instr)
-
     client = get_openai_client()
-    completion = client.chat.completions.create(
+    completion = await client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": system_instr},
-            {"role": "user", "content": user_instr},
-        ],
-        temperature=0.3
+            {"role": "system", "content": "You are a professional personal finance assistant..."},
+            {"role": "user", "content": f"Context: {json.dumps(current_context)}"}
+        ]
     )
 
     response = completion.choices[0].message.content
-    if DEBUG_MODE:
-        print("[DEBUG] Generator - Raw Response:", response)
     new_history = state["history"] + [f"User: {state['transcription']}", f"Assistant: {response}"]
-    
-    print(f"--- Generator: Developed response ---")
     return {"response": response, "history": new_history}
