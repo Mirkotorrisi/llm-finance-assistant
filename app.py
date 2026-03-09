@@ -5,9 +5,11 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 
 from src.routes.chat import router as chat_router
 from src.routes.core import router as core_router
+from src.routes.statements import router as statements_router
 
 from src.workflow.mcp_client import get_mcp_client
 
@@ -37,3 +39,8 @@ app.add_middleware(
 
 app.include_router(core_router)
 app.include_router(chat_router)
+app.include_router(statements_router)
+
+
+if __name__ == "__main__":
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

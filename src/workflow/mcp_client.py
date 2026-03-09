@@ -113,6 +113,15 @@ class MCPClientManager:
             await self.connect()
         return await self.session.list_tools()
 
+    async def disconnect(self):
+        """Cleanly close MCP session and transport context."""
+        if self.session:
+            await self.session.__aexit__(None, None, None)
+            self.session = None
+        if self._client_context:
+            await self._client_context.__aexit__(None, None, None)
+            self._client_context = None
+
 # Singleton for the agent
 _manager = None
 _mcp_client = None

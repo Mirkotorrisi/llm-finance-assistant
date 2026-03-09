@@ -2,6 +2,14 @@
 
 A multimodal virtual assistant for managing personal finances. This application allows users to interact via text or voice to query and manage their financial data. All finance data operations are delegated to a remote MCP server ([finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api)) via HTTP — the agent contains no local database or business logic for transactions.
 
+## Quickstart (uv)
+
+```bash
+uv sync
+cp .env.example .env  # then set OPENAI_API_KEY and MCP_SERVER_BASE_URL
+uv run app.py
+```
+
 ## Architecture: Agent as MCP Client
 
 This repository implements the **agent layer** only. All finance actions (listing transactions, adding expenses, checking balances, etc.) are performed by calling the remote MCP server over HTTP.
@@ -69,16 +77,19 @@ llm-finance-assistant/
 │   │   └── state.py       # State type definitions
 │   ├── models/            # Shared data models
 │   │   └── domain.py      # Domain models (Action, Parameters, etc.)
-│   ├── api/               # FastAPI application
-│   │   └── app.py         # API endpoints and WebSocket handler
 │   ├── services/          # File processing and RAG services
-│   └── app.py             # API server entry point
+│   ├── routes/            # FastAPI routers
+│   └── workflow/          # LangGraph workflow and MCP client
+├── app.py                 # FastAPI server entry point
+├── pyproject.toml         # Project dependencies and metadata
+├── uv.lock                # Locked dependency versions
 └── README.md
 ```
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) installed
 - OpenAI API Key
 - Running instance of [finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api) (the remote MCP server)
 
@@ -86,18 +97,13 @@ llm-finance-assistant/
 
 1. **Install Dependencies**:
 
-   Using pipenv:
+   Sync dependencies with `uv`:
    ```bash
-   pipenv install
-   ```
-
-   Or using pip:
-   ```bash
-   pip install pydantic langgraph speechrecognition python-dotenv openai fastapi uvicorn[standard] websockets pypdf2 openpyxl pandas python-multipart requests
+   uv sync
    ```
 
 2. **Configure Environment**:
-   Create a `.env` file in the project root (use `.env.example` as a template):
+   Create a `.env` file in the project root:
 
    ```env
    OPENAI_API_KEY=your_actual_key_here
@@ -117,7 +123,7 @@ llm-finance-assistant/
 Start the FastAPI server:
 
 ```bash
-python -m src.app
+uv run app.py
 ```
 
 The API will be available at `http://localhost:8000`
