@@ -11,5 +11,6 @@ class FinanceState(TypedDict):
     action: Action
     parameters: FinancialParameters
     query_results: Optional[Union[List[dict], dict, float, bool]]
+    ui_metadata: Optional[dict]
     response: Optional[str]
     history: List[str]

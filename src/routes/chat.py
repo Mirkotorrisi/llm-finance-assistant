@@ -84,6 +84,43 @@ async def websocket_chat(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
 
+@router.post("/chat")
+async def chat_endpoint(request: ChatRequest):
+    """POST endpoint for synchronous chat interaction with the agent graph."""
+    assistant_graph = create_assistant_graph()
+    
+    state: FinanceState = {
+        "input": UserInput(text=request.message, is_audio=request.is_audio),
+        "transcription": None,
+        "action": Action.UNKNOWN,
+        "parameters": FinancialParameters(),
+        "query_results": None,
+        "ui_metadata": None,
+        "response": None,
+        "history": [], # In a real app, we'd pass history here
+    }
+
+    try:
+        result = await assistant_graph.ainvoke(state)
+        
+        # Parse the JSON response we formed in generator_node
+        try:
+            parsed_response = json.loads(result["response"])
+        except:
+            parsed_response = {"text": result["response"], "ui": None}
+
+        return {
+            "response": parsed_response,
+            "action": result["action"].value if result["action"] else "unknown",
+            "parameters": result["parameters"].model_dump(exclude_none=True),
+            "query_results": result["query_results"],
+            "transcription": result.get("transcription")
+        }
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 async def _run_and_send(websocket, graph, text_or_path, is_audio, history):
     """Helper function to run the assistant graph and send the response back to the client."""
     
@@ -93,6 +130,7 @@ async def _run_and_send(websocket, graph, text_or_path, is_audio, history):
         "action": Action.UNKNOWN,
         "parameters": FinancialParameters(),
         "query_results": None,
+        "ui_metadata": None,
         "response": None,
         "history": history,
     }
@@ -109,5 +147,5 @@ async def _run_and_send(websocket, graph, text_or_path, is_audio, history):
         "action": result["action"].value if result["action"] else "unknown",
         "parameters": result["parameters"].model_dump(exclude_none=True),
         "query_results": result["query_results"],
-        "transcription": result.get("transcription") # Useful if the user spoke and we want to show the transcribed text in the UI
+        "transcription": result.get("transcription")
     })

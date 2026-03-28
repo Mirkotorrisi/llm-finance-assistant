@@ -93,6 +93,51 @@ async def query_node(state: FinanceState) -> Dict:
         return {"query_results": {"error": str(e)}}
 
 
+async def ui_planner_node(state: FinanceState) -> Dict:
+    """UI Planner Node: Decides which UI component to show based on the results."""
+    action = state["action"]
+    results = state["query_results"]
+    
+    if not results or (isinstance(results, dict) and "error" in results):
+        return {"ui_metadata": None}
+
+    ui_metadata = None
+
+    if action == Action.LIST and isinstance(results, list):
+        # Format for summary-table
+        ui_metadata = {
+            "type": "table",
+            "componentKey": "summary-table",
+            "data": {
+                "columns": [
+                    {"key": "date", "header": "Date"},
+                    {"key": "description", "header": "Description"},
+                    {"key": "amount", "header": "Amount", "align": "right"},
+                    {"key": "category", "header": "Category"}
+                ],
+                "rows": results[:10] # Limit to 10 for the UI
+            },
+            "metadata": {
+                "title": "Recent Transactions",
+                "description": f"Showing {len(results[:10])} results"
+            }
+        }
+    elif action == Action.BALANCE:
+        # Format for metric-card
+        balance = results if isinstance(results, (int, float)) else results.get("balance", 0)
+        ui_metadata = {
+            "type": "metric",
+            "componentKey": "metric-card",
+            "data": {
+                "value": balance,
+                "label": "Total Balance",
+                "format": "currency"
+            }
+        }
+    
+    return {"ui_metadata": ui_metadata}
+
+
 async def generator_node(state: FinanceState) -> Dict:
     """Naturale Language Generator Node: Creates the final response using the obtained data."""
     mcp_client = await get_mcp_client()
@@ -103,6 +148,7 @@ async def generator_node(state: FinanceState) -> Dict:
     current_context = {
         "action": state["action"],
         "results": state["query_results"],
+        "ui_planned": state["ui_metadata"],
         "current_balance": current_balance,
         "today": datetime.date.today().isoformat()
     }
@@ -111,11 +157,21 @@ async def generator_node(state: FinanceState) -> Dict:
     completion = await client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are a professional personal finance assistant..."},
+            {"role": "system", "content": "You are a professional personal finance assistant. Explain the results to the user naturally. If there is a UI component planned, refer to it in your message."},
             {"role": "user", "content": f"Context: {json.dumps(current_context)}"}
         ]
     )
 
-    response = completion.choices[0].message.content
-    new_history = state["history"] + [f"User: {state['transcription']}", f"Assistant: {response}"]
-    return {"response": response, "history": new_history}
+    text_response = completion.choices[0].message.content
+    
+    # Bundle text and UI metadata into a single response object
+    # This will be parsed by the Next.js API route
+    full_response = {
+        "text": text_response,
+        "ui": state["ui_metadata"]
+    }
+    
+    json_response = json.dumps(full_response)
+    new_history = state["history"] + [f"User: {state['transcription']}", f"Assistant: {text_response}"]
+    
+    return {"response": json_response, "history": new_history}

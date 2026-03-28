@@ -2,7 +2,7 @@
 
 from langgraph.graph import StateGraph, END
 from src.workflow.state import FinanceState
-from src.workflow.nodes import asr_node, nlu_node, query_node, generator_node
+from src.workflow.nodes import asr_node, nlu_node, query_node, ui_planner_node, generator_node
 
 
 
@@ -16,11 +16,13 @@ def create_assistant_graph():
     workflow.add_node("asr", asr_node)
     workflow.add_node("nlu", nlu_node)
     workflow.add_node("query", query_node)
+    workflow.add_node("ui_planner", ui_planner_node)
     workflow.add_node("generator", generator_node)
 
     workflow.set_entry_point("asr")
     workflow.add_edge("asr", "nlu")
     workflow.add_edge("nlu", "query")
-    workflow.add_edge("query", "generator")
+    workflow.add_edge("query", "ui_planner")
+    workflow.add_edge("ui_planner", "generator")
     workflow.add_edge("generator", END)
     return workflow.compile()
