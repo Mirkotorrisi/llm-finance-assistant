@@ -1,353 +1,38 @@
-# Multimodal Personal Finance Assistant
+# AI Finance Assistant Agent 🏦🤖
 
-A multimodal virtual assistant for managing personal finances. This application allows users to interact via text or voice to query and manage their financial data. All finance data operations are delegated to a remote MCP server ([finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api)) via HTTP — the agent contains no local database or business logic for transactions.
+The **AI Finance Assistant Agent** is the brain of the ecosystem, powered by **LangGraph** and **FastAPI**. It interprets natural language queries, interacts with the Finance API via MCP tools, and plans dynamic UI responses.
 
-## Quickstart (uv)
+## 🚀 Quick Start
 
-```bash
-uv sync
-cp .env.example .env  # then set OPENAI_API_KEY and MCP_SERVER_BASE_URL
-uv run app.py
-```
+This service is typically run as part of the [Finance Assistant Monorepo](../README.md) using Docker Compose.
 
-## Architecture: Agent as MCP Client
+### Local Development (with uv)
 
-This repository implements the **agent layer** only. All finance actions (listing transactions, adding expenses, checking balances, etc.) are performed by calling the remote MCP server over HTTP.
+We use **uv** for high-performance dependency management.
 
-```
-User (text/audio)
-       │
-       ▼
-┌─────────────────────────────────────┐
-│  LLM Finance Assistant (this repo)  │
-│  ┌──────────────────────────────┐   │
-│  │  ASR → NLU → Query → Gen    │   │
-│  │  (LangGraph workflow)        │   │
-│  └──────────┬───────────────────┘   │
-└─────────────┼───────────────────────┘
-              │  HTTP (REST)
-              ▼
-┌─────────────────────────────┐
-│  finance-assistant-api      │
-│  (Remote MCP Server)        │
-│  - /api/transactions        │
-│  - /api/balance             │
-│  - /api/accounts            │
-│  - /api/financial-data      │
-└─────────────────────────────┘
-```
-
-### Remote MCP Client (`src/workflow/mcp_client.py`)
-
-`RemoteMCPClient` is the HTTP client that translates workflow calls into REST requests:
-
-| Method | Remote endpoint |
-|---|---|
-| `list_transactions(category, start_date, end_date)` | `GET /api/transactions` |
-| `add_transaction(amount, category, description, ...)` | `POST /api/transactions` |
-| `add_transactions_bulk(transactions)` | `POST /api/transactions/bulk` |
-| `delete_transaction(id)` | `DELETE /api/transactions/{id}` |
-| `get_balance()` | `GET /api/balance` |
-| `get_existing_categories()` | `GET /api/transactions` (derived) |
-| `get_accounts()` | `GET /api/accounts` |
-| `get_financial_data(year)` | `GET /api/financial-data/{year}` |
-
-## Features
-
-- **Agent-as-Client Architecture**: Delegates all finance actions to the remote MCP server — no local DB required.
-- **Multimodal Interaction**: Supports text-based input and audio transcription (via `SpeechRecognition`).
-- **Intelligent NLU**: Powered by OpenAI's `gpt-4o-mini` to dynamically interpret user intent, categories, and timeframes.
-- **Dynamic Transaction Management**:
-  - Add expenses or income.
-  - Delete transactions by ID.
-  - Query historic spending with natural language (e.g., "last 3 days", "this week").
-- **State Management**: Built with `LangGraph` to manage conversational history and execution nodes.
-- **REST API & WebSocket**: FastAPI-based API for programmatic access and real-time chat via WebSocket.
-- **Debug Mode**: Includes a specialized logging mode to inspect LLM reasonings and system prompts.
-
-## Code Structure
-
-```
-llm-finance-assistant/
-├── src/
-│   ├── workflow/          # Agentic workflow (LangGraph)
-│   │   ├── mcp_client.py   # RemoteMCPClient — client for the remote MCP server
-│   │   ├── nodes.py       # Workflow nodes (ASR, NLU, Query, Generator)
-│   │   ├── graph.py       # Graph definition and compilation
-│   │   └── state.py       # State type definitions
-│   ├── models/            # Shared data models
-│   │   └── domain.py      # Domain models (Action, Parameters, etc.)
-│   ├── services/          # File processing and RAG services
-│   ├── routes/            # FastAPI routers
-│   └── workflow/          # LangGraph workflow and MCP client
-├── app.py                 # FastAPI server entry point
-├── pyproject.toml         # Project dependencies and metadata
-├── uv.lock                # Locked dependency versions
-└── README.md
-```
-
-## Prerequisites
-
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) installed
-- OpenAI API Key
-- Running instance of [finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api) (the remote MCP server)
-
-## Setup
-
-1. **Install Dependencies**:
-
-   Sync dependencies with `uv`:
+1. Ensure you have [uv](https://github.com/astral-sh/uv) installed.
+2. Install dependencies:
    ```bash
    uv sync
    ```
-
-2. **Configure Environment**:
-   Create a `.env` file in the project root:
-
-   ```env
-   OPENAI_API_KEY=your_actual_key_here
-
-   # URL of the remote finance-assistant-api MCP server
-   MCP_SERVER_BASE_URL=http://localhost:8000
+3. Run the development server:
+   ```bash
+   uv run uvicorn app:app --reload --port 8000
    ```
 
-3. **Start the Remote MCP Server**:
+## 🧠 Brain & Workflow
 
-   Clone and run [finance-assistant-api](https://github.com/Mirkotorrisi/finance-assistant-api) first, then point `MCP_SERVER_BASE_URL` at it.
+The agent uses a LangGraph workflow to:
+1.  **Interpret Message**: Extract user intent.
+2.  **Tool Execution**: Call the Finance API via MCP to fetch balances, transactions, and more.
+3.  **UI Planning**: Decide which component (`summary-table`, `metric-card`, `chart`) is best for visualization.
+4.  **Generation**: Stream a final text response with embedded UI metadata.
 
-## Usage
+## 🛠️ Configuration
 
-### REST API and WebSocket
+Configure the agent in `.env`:
+- `OPENAI_API_KEY`: Required for LLM reasoning.
+- `FINANCE_API_URL`: Path to the core Finance API (default: `http://localhost:8081`).
 
-Start the FastAPI server:
-
-```bash
-uv run app.py
-```
-
-The API will be available at `http://localhost:8000`
-
-#### API Documentation
-
-Once the server is running, visit:
-- **Interactive API docs**: http://localhost:8000/docs
-- **Alternative docs**: http://localhost:8000/redoc
-
-#### Available Endpoints
-
-1. **Health Check**
-   ```
-   GET /health
-   ```
-
-2. **Get Transactions**
-   ```
-   GET /api/transactions?category=food&start_date=2026-01-01&end_date=2026-01-31
-   ```
-
-3. **Get Balance**
-   ```
-   GET /api/balance
-   ```
-
-4. **Upload Bank Statement**
-   ```
-   POST /statements/upload
-   Content-Type: multipart/form-data
-   
-   Form data:
-   - file: Bank statement file (PDF, XLS/XLSX, or CSV, max 10 MB)
-   ```
-   
-   Supported file formats:
-   - **CSV**: Expects columns for date, description, amount (optionally currency, category)
-   - **Excel (XLS/XLSX)**: Expects columns for date, description, amount (optionally currency, category)
-   - **PDF**: Uses LLM (GPT-4o-mini) to intelligently extract and parse transactions from unstructured text
-   
-   Features:
-   - **LLM-based PDF parsing**: Intelligently extracts transactions from bank statement PDFs using OpenAI
-   - **Automatic duplicate detection**: Skips already existing transactions (checked via MCP client)
-   - **Smart categorization**: Uses LLM to assign appropriate categories to transactions
-   - **Currency support**: Extracts from data or defaults to EUR
-  - **MCP client persistence**: Parsed and deduplicated transactions are bulk-added via the MCP client (`get_mcp_client()`), which delegates to the configured remote MCP server
-  - **RAG integration (temporary only)**: Transactions are added to an in-memory temporary store during upload flow only
-   
-   Example response:
-   ```json
-   {
-     "success": true,
-     "message": "Successfully processed 5 transactions",
-     "transactions_processed": 5,
-     "transactions_added": 5,
-     "transactions_skipped": 0,
-     "transactions": [...]
-   }
-   ```
-
-5. **Chat (REST)**
-   ```
-   POST /api/chat
-   Content-Type: application/json
-   
-   {
-     "message": "What is my balance?",
-     "is_audio": false
-   }
-   ```
-
-6. **Chat with Audio (REST)**
-   ```
-   POST /api/chat
-   Content-Type: application/json
-   
-   {
-     "message": "audio query",
-     "is_audio": true,
-     "audio_data": "<base64-encoded WAV file>"
-   }
-   ```
-
-#### WebSocket Chat
-
-Connect to the WebSocket endpoint at `ws://localhost:8000/ws/chat`
-
-**Send message (text)**:
-```json
-{
-  "message": "Show me my food expenses",
-  "is_audio": false
-}
-```
-
-**Receive response**:
-```json
-{
-  "response": "You have spent $125 on food this week...",
-  "action": "list",
-  "parameters": {"category": "food", "start_date": "2026-01-05"},
-  "query_results": [...]
-}
-```
-
-### Using the API with Python
-
-```python
-import requests
-
-# Get balance
-response = requests.get("http://localhost:8000/api/balance")
-print(response.json())
-
-# Chat
-response = requests.post(
-    "http://localhost:8000/api/chat",
-    json={"message": "How much did I spend on food this week?"}
-)
-print(response.json())
-
-# Upload bank statement
-with open("statement.csv", "rb") as f:
-    files = {"file": ("statement.csv", f, "text/csv")}
-    response = requests.post("http://localhost:8000/statements/upload", files=files)
-    print(response.json())
-    # Output: {"success": true, "transactions_added": 5, ...}
-```
-
-### Bank Statement Upload Format
-
-The `/statements/upload` endpoint accepts bank statements in CSV, Excel (XLS/XLSX), or PDF format.
-
-#### CSV/Excel Format
-
-```csv
-date,description,amount,currency,category
-2026-01-11,Amazon payment,-49.90,EUR,Shopping
-2026-01-12,Grocery shopping,-125.50,USD,Food
-2026-01-13,Salary payment,2500.00,USD,Income
-```
-
-**Column mapping** (flexible field names):
-- **Date**: `date`, `transaction date`, `booking date`, `value date`
-- **Description**: `description`, `details`, `memo`, `narrative`, `transaction details`
-- **Amount**: `amount`, `value`, `debit`, `credit`, `transaction amount`
-- **Currency** (optional): `currency`, `ccy` - defaults to EUR if not provided
-- **Category** (optional): `category`, `type`, `transaction type` - auto-categorized if not provided
-
-#### PDF Format
-
-PDF files are parsed to extract text. For best results, PDF statements should contain:
-- Date in format: DD/MM/YYYY or MM/DD/YYYY or YYYY-MM-DD
-- Clear transaction descriptions
-- Amounts with currency symbols ($, €, £) or numeric values
-
-## Development
-
-### Running Tests
-
-Run unit tests with pytest:
-
-```bash
-python -m pytest tests/ -v
-```
-
-### Module Structure
-
-- **workflow/**: LangGraph-based agentic workflow
-  - `mcp_client.py`: `RemoteMCPClient` — client for the remote MCP server
-  - `nodes.py`: Workflow nodes (ASR, NLU, Query, Generator)
-  - `graph.py`: Graph definition and compilation
-  - `state.py`: State type definitions
-- **models/**: Shared Pydantic models for type safety and validation
-- **api/**: FastAPI application with REST and WebSocket endpoints
-- **services/**: File processing, transaction parsing, and RAG services
-  - `file_processor.py`: Validates and extracts data from PDF, Excel, and CSV files
-  - `transaction_parser.py`: Parses extracted data using LLM for intelligent categorization and PDF extraction
-  - `vectorization.py`: RAG service with in-memory vector store for semantic transaction search
-
-## Key Components
-
-### RemoteMCPClient
-
-`RemoteMCPClient` (in `src/workflow/mcp_client.py`) is the single point of contact with the remote finance-assistant-api server. It exposes the same method interface that the workflow nodes and API endpoints rely on, translating each call into an appropriate remote request.
-
-### Workflow Nodes
-
-1. **ASR Node**: Converts audio to text (or passes through text input)
-2. **NLU Node**: Uses LLM to extract intent and parameters
-3. **Query Node**: Executes the action via the remote MCP client
-4. **Generator Node**: Generates natural language response
-
-### API Application
-
-FastAPI application with:
-- REST endpoints that proxy to the remote MCP server for transactions and balance
-- POST endpoint for uploading and processing bank statements (PDF, Excel, CSV) with LLM-based parsing
-- POST endpoint for semantic transaction search using RAG
-- POST endpoint for processing chat requests
-- WebSocket endpoint for real-time bidirectional communication
-- Support for both text and audio inputs (base64-encoded)
-
-### File Processing Services
-
-The services module handles bank statement uploads:
-- **FileProcessor**: Validates file formats/sizes and extracts raw data from PDF, Excel, and CSV files
-- **TransactionParser**: Uses LLM (GPT-4o-mini) to intelligently parse PDFs and categorize transactions
-- **RAGService**: In-memory vector store for semantic transaction search using OpenAI embeddings
-
-Transaction persistence in the upload flow uses `get_mcp_client()` from `src/workflow/__init__.py`,
-which delegates to the remote MCP client facade in `src/workflow/mcp_client.py`.
-
-## Contributing
-
-The modular structure makes it easy to:
-- Add new workflow nodes in `workflow/nodes.py`
-- Extend API endpoints in `api/app.py`
-- Add new models in `models/domain.py`
-- Add new file format support in `services/file_processor.py`
-- Improve LLM-based parsing in `services/transaction_parser.py`
-- Enhance RAG search capabilities in `services/vectorization.py`
-
-## License
-
-[Add your license here]
+---
+Part of the [Finance Assistant Monorepo](../)
