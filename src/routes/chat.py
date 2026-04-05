@@ -137,13 +137,15 @@ async def chat_plan_endpoint(request: ChatPlanRequest):
     for msg in reversed(request.messages):
         if msg.role != "user":
             continue
-        if msg.content is not None:
-            user_text = msg.content
+        candidate: str | None = None
+        if msg.content:
+            candidate = msg.content
         elif msg.parts:
-            user_text = " ".join(
+            candidate = " ".join(
                 part.text for part in msg.parts if part.type == "text" and part.text is not None
-            )
-        if user_text:
+            ) or None
+        if candidate:
+            user_text = candidate
             break
 
     if not user_text:
