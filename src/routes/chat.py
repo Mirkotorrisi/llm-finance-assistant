@@ -6,11 +6,19 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from src.models import Action, FinancialParameters, UserInput
-from src.models.chat import ChatRequest
+from src.models.chat import (
+    ChatPlanRequest,
+    ChatPlanResponse,
+    ChatRequest,
+    Message,
+    UIPlan,
+    UIPlanComponent,
+)
 from src.workflow import create_assistant_graph
 from src.workflow.state import FinanceState
 
@@ -149,3 +157,97 @@ async def _run_and_send(websocket, graph, text_or_path, is_audio, history):
         "query_results": result["query_results"],
         "transcription": result.get("transcription")
     })
+
+
+def _extract_last_user_text(messages: list[Message]) -> str:
+    """Extract the text content from the last user message in a messages list.
+
+    Checks ``content`` first; falls back to joining text parts from ``parts``.
+    Returns an empty string if no user message is found.
+    """
+    for message in reversed(messages):
+        if message.role == "user":
+            if message.content:
+                return message.content
+            if message.parts:
+                text_parts = [p.text for p in message.parts if p.type == "text" and p.text]
+                if text_parts:
+                    return " ".join(text_parts)
+    return ""
+
+
+def _build_ui_plan(text: str, ui_metadata: dict) -> UIPlan:
+    """Map ``ui_metadata`` produced by the workflow into a :class:`UIPlan`.
+
+    ``ui_metadata`` follows the shape set by ``ui_planner_node``:
+    - ``componentKey``: preferred display component identifier (e.g. ``"summary-table"``)
+    - ``type``: fallback type string (e.g. ``"table"``, ``"metric"``)
+    - ``metadata.title`` or ``data.label``: human-readable title for the component
+    """
+    component_type = ui_metadata.get("componentKey") or ui_metadata.get("type", "unknown")
+
+    title: Optional[str] = None
+    metadata = ui_metadata.get("metadata", {})
+    data = ui_metadata.get("data", {})
+    if isinstance(metadata, dict) and metadata.get("title"):
+        title = metadata["title"]
+    elif isinstance(data, dict) and data.get("label"):
+        title = data["label"]
+
+    component = UIPlanComponent(type=component_type, order=0, title=title)
+    return UIPlan(text=text, components=[component])
+
+
+@router.post("/chat/plan", response_model=ChatPlanResponse)
+async def chat_plan_endpoint(request: ChatPlanRequest):
+    """POST endpoint compatible with the UI contract.
+
+    Accepts ``{ messages }`` (a conversation thread) and returns
+    ``{ text, plan? }`` where ``plan`` carries optional UI rendering metadata.
+
+    The last user message is extracted from ``messages`` and fed into the
+    existing assistant graph.  The natural-language response and any UI
+    metadata produced by the graph are mapped into the response shape the
+    frontend expects.
+    """
+    user_text = _extract_last_user_text(request.messages)
+    if not user_text:
+        raise HTTPException(status_code=400, detail="No user message text found in messages")
+
+    assistant_graph = create_assistant_graph()
+
+    state: FinanceState = {
+        "input": UserInput(text=user_text, is_audio=False),
+        "transcription": None,
+        "action": Action.UNKNOWN,
+        "parameters": FinancialParameters(),
+        "query_results": None,
+        "ui_metadata": None,
+        "response": None,
+        "history": [],
+    }
+
+    try:
+        result = await assistant_graph.ainvoke(state)
+
+        # generator_node stores a JSON string in result["response"]
+        try:
+            parsed_response = json.loads(result["response"])
+            text = parsed_response.get("text") or result["response"]
+            ui_data = parsed_response.get("ui")
+        except (json.JSONDecodeError, TypeError):
+            text = result["response"] or ""
+            ui_data = None
+
+        # Prefer the dedicated ui_metadata field if the parsed response had no "ui"
+        if ui_data is None:
+            ui_data = result.get("ui_metadata")
+
+        plan = _build_ui_plan(text, ui_data) if ui_data else None
+
+        return ChatPlanResponse(text=text, plan=plan)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in chat/plan endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

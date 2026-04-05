@@ -28,6 +28,72 @@ The agent uses a LangGraph workflow to:
 3.  **UI Planning**: Decide which component (`summary-table`, `metric-card`, `chart`) is best for visualization.
 4.  **Generation**: Stream a final text response with embedded UI metadata.
 
+## 📡 API Endpoints
+
+### `POST /chat` (existing)
+Synchronous chat endpoint for direct clients.
+
+**Request**
+```json
+{ "message": "string", "is_audio": false }
+```
+**Response**
+```json
+{
+  "response": { "text": "string", "ui": {} },
+  "action": "string",
+  "parameters": {},
+  "query_results": null,
+  "transcription": null
+}
+```
+
+---
+
+### `POST /chat/plan` (UI-compatible)
+UI-compatible endpoint consumed directly by the frontend.  It accepts a
+conversation thread and returns only the assistant text plus an optional
+UI rendering plan.
+
+**Request**
+```json
+{
+  "messages": [
+    { "role": "user", "content": "What is my balance?" }
+  ]
+}
+```
+Each message can alternatively use `parts` instead of `content`:
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "parts": [{ "type": "text", "text": "Show my transactions" }]
+    }
+  ]
+}
+```
+
+**Response**
+```json
+{
+  "text": "Your current balance is €1,234.56.",
+  "plan": {
+    "text": "Your current balance is €1,234.56.",
+    "components": [
+      { "type": "metric-card", "order": 0, "title": "Total Balance" }
+    ]
+  }
+}
+```
+`plan` is `null` when no UI component was selected for the query.
+`plan.text` mirrors the top-level `text` field and is included for
+convenience so that the UI can reference the text within the plan object
+without looking it up from the parent.
+
+---
+
 ## 🛠️ Configuration
 
 Configure the agent in `.env`:
