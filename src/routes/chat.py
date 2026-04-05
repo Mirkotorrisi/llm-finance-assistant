@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from src.models import Action, FinancialParameters, UserInput
-from src.models.chat import ChatRequest
+from src.models.chat import ChatPlanRequest, ChatPlanResponse, ChatRequest
 from src.workflow import create_assistant_graph
 from src.workflow.state import FinanceState
 
@@ -119,6 +119,75 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/plan", response_model=ChatPlanResponse)
+async def chat_plan_endpoint(request: ChatPlanRequest):
+    """POST endpoint for UI-compatible chat interaction.
+
+    Accepts a ``messages`` array (each item may use ``content`` or ``parts``),
+    extracts the last user text, runs the assistant graph, and returns a
+    ``{ text, plan? }`` response suitable for direct consumption by the UI.
+    """
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="'messages' must be a non-empty list.")
+
+    # Extract the last user message text
+    user_text: str | None = None
+    for msg in reversed(request.messages):
+        if msg.role != "user":
+            continue
+        if msg.content is not None:
+            user_text = msg.content
+        elif msg.parts:
+            user_text = " ".join(
+                part.text for part in msg.parts if part.type == "text" and part.text is not None
+            )
+        if user_text:
+            break
+
+    if not user_text:
+        raise HTTPException(status_code=400, detail="No user message text found in 'messages'.")
+
+    assistant_graph = create_assistant_graph()
+
+    state: FinanceState = {
+        "input": UserInput(text=user_text, is_audio=False),
+        "transcription": None,
+        "action": Action.UNKNOWN,
+        "parameters": FinancialParameters(),
+        "query_results": None,
+        "ui_metadata": None,
+        "response": None,
+        "history": [],
+    }
+
+    try:
+        result = await assistant_graph.ainvoke(state)
+    except Exception as e:
+        logger.error(f"Error in /chat/plan endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # --- Extract text ---
+    raw_response = result.get("response") or ""
+    try:
+        parsed_response = json.loads(raw_response)
+        text = parsed_response.get("text") or raw_response
+    except (json.JSONDecodeError, TypeError):
+        parsed_response = None
+        text = raw_response
+
+    # --- Extract plan (ui_metadata) ---
+    plan = None
+
+    # 1. Top-level ui_metadata in the graph result
+    if result.get("ui_metadata") is not None:
+        plan = result["ui_metadata"]
+    elif parsed_response and isinstance(parsed_response, dict):
+        # 2. Parsed response JSON contains 'ui' or 'ui_metadata'
+        plan = parsed_response.get("ui_metadata") or parsed_response.get("ui")
+
+    return ChatPlanResponse(text=text, plan=plan)
 
 
 async def _run_and_send(websocket, graph, text_or_path, is_audio, history):
