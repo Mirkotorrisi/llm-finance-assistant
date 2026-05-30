@@ -51,7 +51,28 @@ async def nlu_node(state: FinanceState) -> Dict:
 
     today = datetime.date.today().isoformat()
     
-    system_prompt = f"You are an NLU engine... Today is {today}." 
+    system_prompt = f"""You are an NLU engine for a personal finance assistant. Today is {today}.
+
+Extract the user's intent and parameters from their message, then return a JSON object with:
+- "action": one of "list", "add", "delete", "balance", "unknown"
+- "parameters": an object with any of these optional fields:
+  - "category" (string): spending category (e.g. "groceries", "transport", "salary")
+  - "start_date" (string, YYYY-MM-DD): beginning of a date range
+  - "end_date" (string, YYYY-MM-DD): end of a date range
+  - "amount" (number): transaction amount, positive for income, negative for expenses
+  - "description" (string): text description of the transaction
+  - "transaction_id" (integer): ID of a specific transaction
+
+Action meanings:
+- "list": user wants to see transactions (optionally filtered by date, category, etc.)
+- "add": user wants to record a new transaction
+- "delete": user wants to remove a transaction
+- "balance": user wants to know their balance or financial summary
+- "unknown": the intent is unclear or unrelated to finance
+
+Date resolution: convert relative dates to absolute YYYY-MM-DD. "last month" → first and last day of the previous calendar month. "this month" → first day of current month to today. "today" → {today}.
+
+Return ONLY the JSON object, no explanation."""
     
     client = get_openai_client()
     try:
@@ -144,12 +165,16 @@ async def ui_planner_node(state: FinanceState) -> Dict:
 
 
 async def generator_node(state: FinanceState) -> Dict:
-    """Naturale Language Generator Node: Creates the final response using the obtained data."""
-    mcp_client = await get_mcp_client()
-    
-    # We can make an extra call via MCP to always have the updated balance in the context
-    current_balance = await mcp_client.call_tool("get_balance", {})
-    
+    """Natural Language Generator Node: Creates the final response using the obtained data."""
+    action = state["action"]
+
+    # Reuse balance from query_results when already fetched; avoid redundant MCP call
+    if action == Action.BALANCE:
+        current_balance = state["query_results"]
+    else:
+        mcp_client = await get_mcp_client()
+        current_balance = await mcp_client.call_tool("get_balance", {})
+
     current_context = {
         "action": state["action"],
         "results": state["query_results"],
