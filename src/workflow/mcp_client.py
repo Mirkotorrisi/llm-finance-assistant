@@ -143,6 +143,13 @@ def reset_mcp_server():
 async def get_mcp_client():
     global _manager
     if _manager is None:
-        _manager = MCPClientManager(MCP_SERVER_URL)
-        await _manager.connect()
+        manager = MCPClientManager(MCP_SERVER_URL)
+        await manager.connect()  # if this raises, _manager stays None so the next call retries
+        _manager = manager
     return _manager
+
+
+def reset_mcp_client():
+    """Reset the async MCP client singleton (useful after connection failure)."""
+    global _manager
+    _manager = None

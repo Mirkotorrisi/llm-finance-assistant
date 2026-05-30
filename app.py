@@ -11,16 +11,31 @@ from src.routes.chat import router as chat_router
 from src.routes.core import router as core_router
 from src.routes.statements import router as statements_router
 
-from src.workflow.mcp_client import get_mcp_client
+from src.workflow.mcp_client import get_mcp_client, reset_mcp_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    client = await get_mcp_client()
+    # Attempt to pre-connect to the MCP server. A failure here is non-fatal:
+    # the agent will retry lazily on the first incoming request.
+    try:
+        await get_mcp_client()
+        logger.info("MCP client connected on startup")
+    except Exception as e:
+        logger.warning(f"MCP startup connection failed, will retry on first request: {e}")
+        reset_mcp_client()
+
     yield
-    await client.disconnect() # Ensure we cleanly disconnect from the MCP server on shutdown
+
+    # Best-effort disconnect on shutdown
+    try:
+        from src.workflow.mcp_client import _manager  # noqa: PLC0415
+        if _manager is not None:
+            await _manager.disconnect()
+    except Exception as e:
+        logger.warning(f"MCP disconnect on shutdown failed: {e}")
 
 app = FastAPI(
     title="Finance Assistant API",
