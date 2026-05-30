@@ -10,6 +10,7 @@ class ChatRequest(BaseModel):
     message: str
     is_audio: bool = False
     audio_data: Union[str, None] = None
+    history: List[str] = []
 
 
 class ChatResponse(BaseModel):

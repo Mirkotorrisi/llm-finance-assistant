@@ -17,6 +17,7 @@ from src.models.chat import (
     ChatRequest,
     Message,
     UIPlan,
+    UIPlanAction,
     UIPlanComponent,
 )
 from src.workflow import create_assistant_graph
@@ -96,7 +97,7 @@ async def websocket_chat(websocket: WebSocket):
 async def chat_endpoint(request: ChatRequest):
     """POST endpoint for synchronous chat interaction with the agent graph."""
     assistant_graph = create_assistant_graph()
-    
+
     state: FinanceState = {
         "input": UserInput(text=request.message, is_audio=request.is_audio),
         "transcription": None,
@@ -105,16 +106,15 @@ async def chat_endpoint(request: ChatRequest):
         "query_results": None,
         "ui_metadata": None,
         "response": None,
-        "history": [], # In a real app, we'd pass history here
+        "history": request.history,
     }
 
     try:
         result = await assistant_graph.ainvoke(state)
-        
-        # Parse the JSON response we formed in generator_node
+
         try:
             parsed_response = json.loads(result["response"])
-        except:
+        except Exception:
             parsed_response = {"text": result["response"], "ui": None}
 
         return {
@@ -122,7 +122,8 @@ async def chat_endpoint(request: ChatRequest):
             "action": result["action"].value if result["action"] else "unknown",
             "parameters": result["parameters"].model_dump(exclude_none=True),
             "query_results": result["query_results"],
-            "transcription": result.get("transcription")
+            "transcription": result.get("transcription"),
+            "history": result.get("history", []),
         }
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}", exc_info=True)
@@ -179,23 +180,28 @@ def _extract_last_user_text(messages: list[Message]) -> str:
 def _build_ui_plan(text: str, ui_metadata: dict) -> UIPlan:
     """Map ``ui_metadata`` produced by the workflow into a :class:`UIPlan`.
 
-    ``ui_metadata`` follows the shape set by ``ui_planner_node``:
-    - ``componentKey``: preferred display component identifier (e.g. ``"summary-table"``)
-    - ``type``: fallback type string (e.g. ``"table"``, ``"metric"``)
-    - ``metadata.title`` or ``data.label``: human-readable title for the component
+    ``ui_metadata`` now follows the UIPlan shape directly:
+    ``{ "text": "", "components": [{ "type": "...", "order": 0, "title": "...", "action": {...} }] }``
     """
-    component_type = ui_metadata.get("componentKey") or ui_metadata.get("type", "unknown")
-
-    title: Optional[str] = None
-    metadata = ui_metadata.get("metadata", {})
-    data = ui_metadata.get("data", {})
-    if isinstance(metadata, dict) and metadata.get("title"):
-        title = metadata["title"]
-    elif isinstance(data, dict) and data.get("label"):
-        title = data["label"]
-
-    component = UIPlanComponent(type=component_type, order=0, title=title)
-    return UIPlan(text=text, components=[component])
+    components = []
+    for comp_data in ui_metadata.get("components", []):
+        action_data = comp_data.get("action")
+        action = None
+        if isinstance(action_data, dict):
+            action = UIPlanAction(
+                service=action_data.get("service", ""),
+                method=action_data.get("method", ""),
+                params=action_data.get("params", {}),
+            )
+        components.append(
+            UIPlanComponent(
+                type=comp_data.get("type", "unknown"),
+                order=comp_data.get("order", 0),
+                title=comp_data.get("title"),
+                action=action,
+            )
+        )
+    return UIPlan(text=text, components=components)
 
 
 @router.post("/chat/plan", response_model=ChatPlanResponse)

@@ -97,44 +97,49 @@ async def ui_planner_node(state: FinanceState) -> Dict:
     """UI Planner Node: Decides which UI component to show based on the results."""
     action = state["action"]
     results = state["query_results"]
-    
+    params = state["parameters"]
+
     if not results or (isinstance(results, dict) and "error" in results):
         return {"ui_metadata": None}
 
     ui_metadata = None
 
     if action == Action.LIST and isinstance(results, list):
-        # Format for summary-table
+        filter_params: dict = {}
+        if params.category:
+            filter_params["category"] = params.category
+        if params.start_date:
+            filter_params["start_date"] = params.start_date
+        if params.end_date:
+            filter_params["end_date"] = params.end_date
+
         ui_metadata = {
-            "type": "table",
-            "componentKey": "summary-table",
-            "data": {
-                "columns": [
-                    {"key": "date", "header": "Date"},
-                    {"key": "description", "header": "Description"},
-                    {"key": "amount", "header": "Amount", "align": "right"},
-                    {"key": "category", "header": "Category"}
-                ],
-                "rows": results[:10] # Limit to 10 for the UI
-            },
-            "metadata": {
-                "title": "Recent Transactions",
-                "description": f"Showing {len(results[:10])} results"
-            }
+            "text": "",
+            "components": [
+                {
+                    "type": "TransactionsTable",
+                    "order": 0,
+                    "title": "Recent Transactions",
+                    "action": {
+                        "service": "transactions",
+                        "method": "list",
+                        "params": filter_params,
+                    },
+                }
+            ],
         }
     elif action == Action.BALANCE:
-        # Format for metric-card
-        balance = results if isinstance(results, (int, float)) else results.get("balance", 0)
         ui_metadata = {
-            "type": "metric",
-            "componentKey": "metric-card",
-            "data": {
-                "value": balance,
-                "label": "Total Balance",
-                "format": "currency"
-            }
+            "text": "",
+            "components": [
+                {
+                    "type": "SummaryCards",
+                    "order": 0,
+                    "title": "Financial Summary",
+                }
+            ],
         }
-    
+
     return {"ui_metadata": ui_metadata}
 
 
