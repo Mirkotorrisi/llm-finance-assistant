@@ -42,7 +42,6 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
         transactions = TransactionParser.parse_transactions(
             extracted_data,
             existing_categories=existing_categories,
-            use_llm_categorization=True,
         )
 
         if not transactions:
