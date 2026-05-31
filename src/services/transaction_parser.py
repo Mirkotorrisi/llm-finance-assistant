@@ -1,7 +1,6 @@
 """Transaction parser service for converting extracted data to transactions."""
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -9,10 +8,29 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from openai import AsyncOpenAI, OpenAI
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+
+class _ParsedTransaction(BaseModel):
+    date: str
+    description: str
+    amount: float
+    currency: str = "EUR"
+    category: str
+
+
+class _ParsedTransactionList(BaseModel):
+    transactions: List[_ParsedTransaction]
+
+
+class _ParsedCategory(BaseModel):
+    category: str
+    is_new: bool
+    reasoning: str
 
 
 class TransactionParser:
@@ -187,68 +205,45 @@ Your job is to assign a category label to a transaction based on its description
 Rules:
 1. If the transaction clearly fits into one of the existing categories, use that category exactly as it appears.
 2. Only create a NEW category if the transaction doesn't fit well into any existing category.
-3. Category labels should be:
-   - Short (1-2 words)
-   - Descriptive and clear
-   - Lowercase
-   - Consistent with similar transactions
-4. Common categories include: food, transport, shopping, utilities, rent, income, entertainment, health, education, etc.
-
-Respond with ONLY a JSON object in this format:
-{
-  "category": "the_category_name",
-  "is_new": true/false,
-  "reasoning": "brief explanation of why this category was chosen"
-}"""
+3. Category labels should be short (1-2 words), lowercase, and descriptive.
+4. Common categories: food, transport, shopping, utilities, rent, income, entertainment, health, education."""
 
         existing_categories_text = "None - this is the first transaction" if not existing_categories else ", ".join(existing_categories)
-        
-        # Sanitize description to prevent prompt injection
-        # Remove control characters and limit length
+
         sanitized_description = description.strip()[:TransactionParser.MAX_DESCRIPTION_LENGTH]
         sanitized_description = ''.join(char for char in sanitized_description if char.isprintable() or char.isspace())
-        
-        user_prompt = f"""Transaction details:
-- Description: {sanitized_description}
-- Amount: {amount}
-- Type: {transaction_type}
 
-Existing categories: {existing_categories_text}
-
-Please assign the most appropriate category for this transaction."""
+        user_prompt = (
+            f"Transaction details:\n"
+            f"- Description: {sanitized_description}\n"
+            f"- Amount: {amount}\n"
+            f"- Type: {transaction_type}\n\n"
+            f"Existing categories: {existing_categories_text}\n\n"
+            f"Assign the most appropriate category for this transaction."
+        )
 
         try:
-            completion = openai_client.chat.completions.create(
+            completion = openai_client.beta.chat.completions.parse(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.3
+                response_format=_ParsedCategory,
+                temperature=0.3,
             )
-            
-            # Validate response has choices
-            if not completion.choices or len(completion.choices) == 0:
-                raise ValueError("API response contains no choices")
-            
-            response_text = completion.choices[0].message.content
-            if not response_text:
-                raise ValueError("API response content is empty")
-                
-            response_data = json.loads(response_text)
-            
-            category = response_data.get("category", "other")
-            is_new = response_data.get("is_new", False)
-            reasoning = response_data.get("reasoning", "")
-            
-            if is_new:
-                logger.info(f"LLM created new category '{category}' for '{sanitized_description}': {reasoning}")
+
+            parsed = completion.choices[0].message.parsed
+            if parsed is None:
+                raise ValueError("Structured output returned None")
+
+            if parsed.is_new:
+                logger.info(f"LLM created new category '{parsed.category}' for '{sanitized_description}': {parsed.reasoning}")
             else:
-                logger.debug(f"LLM assigned existing category '{category}' for '{sanitized_description}'")
+                logger.debug(f"LLM assigned existing category '{parsed.category}' for '{sanitized_description}'")
             
-            return category.lower().strip()
-            
+            return parsed.category.lower().strip()
+
         except Exception as e:
             logger.warning(f"LLM categorization failed: {str(e)}, falling back to rule-based categorization")
             return TransactionParser._categorize_transaction_fallback(description, amount)
@@ -337,89 +332,43 @@ Please assign the most appropriate category for this transaction."""
                 return []
         
         system_prompt = """You are a financial document parsing expert.
-Your job is to extract transaction data from bank statement text.
-
-Extract the following information for each transaction:
-1. Date (in ISO format YYYY-MM-DD)
-2. Description (what the transaction was for)
-3. Amount (positive for income/credits, negative for expenses/debits)
-4. Currency (USD, EUR, GBP, etc.)
-5. Category (use existing categories when appropriate, or create new ones)
+Extract all financial transactions from the bank statement text provided.
 
 Rules:
 - Only extract clear, identifiable transactions
-- Convert all dates to ISO format (YYYY-MM-DD)
-- Use negative amounts for expenses/debits and positive for income/credits
-- Choose descriptive categories (e.g., "food", "transport", "shopping", "utilities", "income")
-- If currency is not specified, default to EUR
-
-Respond with ONLY a JSON object with this structure:
-{
-  "transactions": [
-    {
-      "date": "YYYY-MM-DD",
-      "description": "transaction description",
-      "amount": -50.00,
-      "currency": "EUR",
-      "category": "food"
-    }
-  ]
-}
-
-If no transactions can be extracted, return: {"transactions": []}"""
+- Dates must be in ISO format (YYYY-MM-DD)
+- Amounts are negative for expenses/debits, positive for income/credits
+- Categories should be short and descriptive (e.g. food, transport, shopping, utilities, income)
+- Default currency to EUR if not specified
+- Reuse existing categories when appropriate"""
 
         existing_categories_text = "None - create appropriate categories" if not existing_categories else ", ".join(existing_categories)
-        
-        # Limit PDF text to prevent token overflow
-        truncated_text = pdf_text[:TransactionParser.MAX_PDF_TEXT_LENGTH] if len(pdf_text) > TransactionParser.MAX_PDF_TEXT_LENGTH else pdf_text
-        
-        user_prompt = f"""Please extract all financial transactions from this bank statement:
+        truncated_text = pdf_text[: TransactionParser.MAX_PDF_TEXT_LENGTH]
 
-{truncated_text}
-
-Existing categories in the system: {existing_categories_text}
-
-Extract all transactions and format them as specified."""
+        user_prompt = (
+            f"Bank statement text:\n\n{truncated_text}\n\n"
+            f"Existing categories: {existing_categories_text}"
+        )
 
         try:
-            completion = openai_client.chat.completions.create(
+            completion = openai_client.beta.chat.completions.parse(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.1  # Low temperature for consistent extraction
+                response_format=_ParsedTransactionList,
+                temperature=0.1,
             )
-            
-            # Validate response
-            if not completion.choices or len(completion.choices) == 0:
-                raise ValueError("API response contains no choices")
-            
-            response_text = completion.choices[0].message.content
-            if not response_text:
-                raise ValueError("API response content is empty")
-            
-            response_data = json.loads(response_text)
-            transactions = response_data.get("transactions", [])
-            
-            logger.info(f"LLM extracted {len(transactions)} transactions from PDF")
-            
-            # Validate and clean extracted transactions
-            valid_transactions = []
-            for txn in transactions:
-                if all(k in txn for k in ["date", "description", "amount", "category"]):
-                    # Ensure proper types
-                    try:
-                        txn["amount"] = float(txn["amount"])
-                        txn["currency"] = txn.get("currency", "EUR")
-                        valid_transactions.append(txn)
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Skipping invalid transaction: {e}")
-                        continue
-            
+
+            parsed = completion.choices[0].message.parsed
+            if parsed is None:
+                raise ValueError("Structured output returned None")
+
+            valid_transactions = [t.model_dump() for t in parsed.transactions]
+            logger.info(f"LLM extracted {len(valid_transactions)} transactions from PDF")
             return valid_transactions
-            
+
         except Exception as e:
             logger.error(f"LLM-based PDF parsing failed: {str(e)}")
             return []
@@ -442,72 +391,35 @@ Extract all transactions and format them as specified."""
         )
 
         system_prompt = """You are a financial document parsing expert.
-Your job is to extract transaction data from bank statement text.
-
-Extract the following information for each transaction:
-1. Date (in ISO format YYYY-MM-DD)
-2. Description (what the transaction was for)
-3. Amount (positive for income/credits, negative for expenses/debits)
-4. Currency (USD, EUR, GBP, etc.)
-5. Category (use existing categories when appropriate, or create new ones)
+Extract all financial transactions from the bank statement text provided.
 
 Rules:
 - Only extract clear, identifiable transactions
-- Convert all dates to ISO format (YYYY-MM-DD)
-- Use negative amounts for expenses/debits and positive for income/credits
-- Choose descriptive categories (e.g., "food", "transport", "shopping", "utilities", "income")
-- If currency is not specified, default to EUR
-
-Respond with ONLY a JSON object with this structure:
-{
-  "transactions": [
-    {
-      "date": "YYYY-MM-DD",
-      "description": "transaction description",
-      "amount": -50.00,
-      "currency": "EUR",
-      "category": "food"
-    }
-  ]
-}
-
-If no transactions can be extracted, return: {"transactions": []}"""
+- Dates must be in ISO format (YYYY-MM-DD)
+- Amounts are negative for expenses/debits, positive for income/credits
+- Categories should be short and descriptive (e.g. food, transport, shopping, utilities, income)
+- Default currency to EUR if not specified
+- Reuse existing categories when appropriate"""
 
         user_prompt = (
-            f"Please extract all financial transactions from this bank statement:\n\n"
-            f"{truncated}\n\n"
-            f"Existing categories in the system: {existing_categories_text}\n\n"
-            f"Extract all transactions and format them as specified."
+            f"Bank statement text:\n\n{truncated}\n\n"
+            f"Existing categories: {existing_categories_text}"
         )
 
         try:
-            completion = await async_client.chat.completions.create(
+            completion = await async_client.beta.chat.completions.parse(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                response_format={"type": "json_object"},
+                response_format=_ParsedTransactionList,
                 temperature=0.1,
             )
-            if not completion.choices:
-                raise ValueError("API response contains no choices")
-            response_text = completion.choices[0].message.content
-            if not response_text:
-                raise ValueError("API response content is empty")
-
-            response_data = json.loads(response_text)
-            transactions = response_data.get("transactions", [])
-
-            valid: List[Dict[str, Any]] = []
-            for txn in transactions:
-                if all(k in txn for k in ["date", "description", "amount", "category"]):
-                    try:
-                        txn["amount"] = float(txn["amount"])
-                        txn["currency"] = txn.get("currency", "EUR")
-                        valid.append(txn)
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Skipping invalid transaction: {e}")
+            parsed = completion.choices[0].message.parsed
+            if parsed is None:
+                raise ValueError("Structured output returned None")
+            valid = [t.model_dump() for t in parsed.transactions]
             logger.info(f"Chunk {label}: {len(valid)} transactions extracted")
             return valid
         except Exception as e:
