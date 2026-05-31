@@ -1,5 +1,6 @@
 """Transaction parser service for converting extracted data to transactions."""
 
+import asyncio
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -423,6 +424,134 @@ Extract all transactions and format them as specified."""
             logger.error(f"LLM-based PDF parsing failed: {str(e)}")
             return []
     
+    @staticmethod
+    async def _parse_pdf_chunk_async(
+        chunk: Dict[str, Any],
+        existing_categories: List[str],
+        async_client: AsyncOpenAI,
+    ) -> List[Dict[str, Any]]:
+        """Parse a single PDF chunk via AsyncOpenAI (used by parse_transactions_async)."""
+        label = chunk.get("pages", f"chunk {chunk.get('chunk_index', '?')}")
+        pdf_text = chunk["pdf_text"]
+        truncated = pdf_text[: TransactionParser.MAX_PDF_TEXT_LENGTH]
+
+        existing_categories_text = (
+            "None - create appropriate categories"
+            if not existing_categories
+            else ", ".join(existing_categories)
+        )
+
+        system_prompt = """You are a financial document parsing expert.
+Your job is to extract transaction data from bank statement text.
+
+Extract the following information for each transaction:
+1. Date (in ISO format YYYY-MM-DD)
+2. Description (what the transaction was for)
+3. Amount (positive for income/credits, negative for expenses/debits)
+4. Currency (USD, EUR, GBP, etc.)
+5. Category (use existing categories when appropriate, or create new ones)
+
+Rules:
+- Only extract clear, identifiable transactions
+- Convert all dates to ISO format (YYYY-MM-DD)
+- Use negative amounts for expenses/debits and positive for income/credits
+- Choose descriptive categories (e.g., "food", "transport", "shopping", "utilities", "income")
+- If currency is not specified, default to EUR
+
+Respond with ONLY a JSON object with this structure:
+{
+  "transactions": [
+    {
+      "date": "YYYY-MM-DD",
+      "description": "transaction description",
+      "amount": -50.00,
+      "currency": "EUR",
+      "category": "food"
+    }
+  ]
+}
+
+If no transactions can be extracted, return: {"transactions": []}"""
+
+        user_prompt = (
+            f"Please extract all financial transactions from this bank statement:\n\n"
+            f"{truncated}\n\n"
+            f"Existing categories in the system: {existing_categories_text}\n\n"
+            f"Extract all transactions and format them as specified."
+        )
+
+        try:
+            completion = await async_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.1,
+            )
+            if not completion.choices:
+                raise ValueError("API response contains no choices")
+            response_text = completion.choices[0].message.content
+            if not response_text:
+                raise ValueError("API response content is empty")
+
+            response_data = json.loads(response_text)
+            transactions = response_data.get("transactions", [])
+
+            valid: List[Dict[str, Any]] = []
+            for txn in transactions:
+                if all(k in txn for k in ["date", "description", "amount", "category"]):
+                    try:
+                        txn["amount"] = float(txn["amount"])
+                        txn["currency"] = txn.get("currency", "EUR")
+                        valid.append(txn)
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Skipping invalid transaction: {e}")
+            logger.info(f"Chunk {label}: {len(valid)} transactions extracted")
+            return valid
+        except Exception as e:
+            logger.warning(f"Skipped chunk {label}: {e}")
+            return []
+
+    @staticmethod
+    async def parse_transactions_async(
+        rows: List[Dict[str, Any]],
+        existing_categories: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Async version of parse_transactions for PDF chunks.
+
+        All chunks are sent to OpenAI in parallel via asyncio.gather — total time
+        equals the slowest single call instead of the sum of all calls.
+        Falls back to the sync path for CSV/Excel rows.
+        """
+        if existing_categories is None:
+            existing_categories = []
+
+        if not (rows and all("pdf_text" in row for row in rows)):
+            # CSV/Excel: run the sync path in a thread to avoid blocking the event loop
+            return await asyncio.to_thread(
+                TransactionParser.parse_transactions, rows, existing_categories
+            )
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OPENAI_API_KEY not set — cannot parse PDF")
+            return []
+
+        async_client = AsyncOpenAI(api_key=api_key)
+        logger.info(f"Parsing {len(rows)} PDF chunk(s) in parallel")
+
+        tasks = [
+            TransactionParser._parse_pdf_chunk_async(chunk, list(existing_categories), async_client)
+            for chunk in rows
+        ]
+        results = await asyncio.gather(*tasks)
+
+        all_transactions: List[Dict[str, Any]] = [tx for chunk_txns in results for tx in chunk_txns]
+        logger.info(f"PDF parsing complete: {len(all_transactions)} transactions extracted")
+        return all_transactions
+
     @staticmethod
     def parse_row(
         row: Dict[str, Any], 

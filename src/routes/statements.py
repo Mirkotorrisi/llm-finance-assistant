@@ -1,6 +1,5 @@
 """Statement upload and ingestion endpoints."""
 
-import asyncio
 import io
 import logging
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -33,17 +32,12 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
 
         mcp_client = await get_mcp_client()
 
-        #TODO: We should get categories from the MCP server from a dedicated tool
-        raw_transactions_data = await mcp_client.call_tool("list_transactions", {})
-        
-        existing_categories = sorted({
-            t["category"] for t in raw_transactions_data if t.get("category")
-        })
+        # Fetch only the distinct categories (SELECT DISTINCT query on the API side).
+        # Much cheaper than downloading all transactions just to extract categories.
+        existing_categories: list[str] = await mcp_client.call_tool("get_distinct_categories", {})
 
-        # parse_transactions calls OpenAI synchronously for each PDF chunk.
-        # Run it in a thread so we don't block the async event loop.
-        transactions = await asyncio.to_thread(
-            TransactionParser.parse_transactions,
+        # All PDF chunks are parsed in parallel — total time = slowest single LLM call.
+        transactions = await TransactionParser.parse_transactions_async(
             extracted_data,
             existing_categories,
         )
@@ -58,14 +52,18 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
                 transactions=[],
             )
 
+        # Deduplication: fetch existing transactions to check against.
+        # TODO: replace with a DB-side check (e.g. unique constraint + upsert) once
+        # the API supports it, to avoid loading the full transaction list into memory.
+        raw_transactions_data = await mcp_client.call_tool("list_transactions", {})
         unique_transactions = TransactionParser.remove_duplicates(
-            transactions, 
-            raw_transactions_data
+            transactions,
+            raw_transactions_data,
         )
 
         added_transactions = await mcp_client.call_tool(
-            "add_transactions_bulk", 
-            {"transactions": unique_transactions}
+            "add_transactions_bulk",
+            {"transactions": unique_transactions},
         )
 
         logger.info(

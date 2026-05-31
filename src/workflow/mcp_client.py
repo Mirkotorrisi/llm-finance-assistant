@@ -97,11 +97,12 @@ class DirectAPIClient:
     # Maps MCP-style tool names to (method, path_template) pairs.
     # Path templates may contain {key} placeholders resolved from arguments.
     _TOOL_MAP: Dict[str, tuple] = {
-        "list_transactions":     ("GET",    "/api/transactions"),
-        "add_transaction":       ("POST",   "/api/transactions"),
-        "add_transactions_bulk": ("POST",   "/api/transactions/bulk"),
-        "delete_transaction":    ("DELETE", "/api/transactions/{transaction_id}"),
-        "get_balance":           ("GET",    "/api/transactions/balance"),
+        "list_transactions":        ("GET",    "/api/transactions"),
+        "get_distinct_categories":  ("GET",    "/api/transactions/categories"),
+        "add_transaction":          ("POST",   "/api/transactions"),
+        "add_transactions_bulk":    ("POST",   "/api/transactions/bulk"),
+        "delete_transaction":       ("DELETE", "/api/transactions/{transaction_id}"),
+        "get_balance":              ("GET",    "/api/transactions/balance"),
     }
 
     def __init__(self, base_url: str):
