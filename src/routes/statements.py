@@ -1,5 +1,6 @@
-"""Statement upload and ingestion endpoints - REFACTORED for MCP."""
+"""Statement upload and ingestion endpoints."""
 
+import asyncio
 import io
 import logging
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -39,16 +40,19 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
             t["category"] for t in raw_transactions_data if t.get("category")
         })
 
-        transactions = TransactionParser.parse_transactions(
+        # parse_transactions calls OpenAI synchronously for each PDF chunk.
+        # Run it in a thread so we don't block the async event loop.
+        transactions = await asyncio.to_thread(
+            TransactionParser.parse_transactions,
             extracted_data,
-            existing_categories=existing_categories,
+            existing_categories,
         )
 
         if not transactions:
             return UploadStatementResponse(
                 success=True,
                 message="No valid transactions found in the file",
-                transactions_processed=len(extracted_data),
+                transactions_processed=0,
                 transactions_added=0,
                 transactions_skipped=0,
                 transactions=[],
@@ -72,7 +76,7 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
         return UploadStatementResponse(
             success=True,
             message=f"Successfully processed {len(added_transactions)} transactions",
-            transactions_processed=len(extracted_data),
+            transactions_processed=len(transactions),
             transactions_added=len(added_transactions),
             transactions_skipped=len(transactions) - len(unique_transactions),
             transactions=added_transactions,

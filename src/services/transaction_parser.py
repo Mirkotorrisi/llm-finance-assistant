@@ -20,8 +20,9 @@ class TransactionParser:
     # Maximum description length for LLM categorization to prevent prompt injection
     MAX_DESCRIPTION_LENGTH = 500
     
-    # Maximum PDF text length for LLM parsing to prevent token overflow
-    MAX_PDF_TEXT_LENGTH = 10000
+    # Maximum characters per PDF chunk sent to the LLM.
+    # Each chunk is already bounded by PAGES_PER_CHUNK pages; this is a safety cap.
+    MAX_PDF_TEXT_LENGTH = 40000
     
     @staticmethod
     def _get_openai_client() -> Optional[OpenAI]:
@@ -536,15 +537,34 @@ Extract all transactions and format them as specified."""
         if existing_categories is None:
             existing_categories = []
         
-        # Check if this is PDF content (single row with pdf_text key)
-        if len(rows) == 1 and "pdf_text" in rows[0]:
-            logger.info("Detected PDF content, using LLM-based parsing")
+        # Detect PDF chunks: all rows have a "pdf_text" key
+        if rows and all("pdf_text" in row for row in rows):
+            total_chunks = len(rows)
+            logger.info(f"Detected {total_chunks} PDF chunk(s) — processing with LLM")
             openai_client = TransactionParser._get_openai_client()
-            return TransactionParser.parse_pdf_with_llm(
-                rows[0]["pdf_text"],
-                existing_categories=existing_categories,
-                openai_client=openai_client
-            )
+            all_transactions: List[Dict[str, Any]] = []
+
+            for chunk in rows:
+                label = chunk.get("pages", f"chunk {chunk.get('chunk_index', '?')}")
+                logger.info(f"  Processing pages {label} ({total_chunks} chunks total)")
+                try:
+                    chunk_txns = TransactionParser.parse_pdf_with_llm(
+                        chunk["pdf_text"],
+                        existing_categories=existing_categories,
+                        openai_client=openai_client,
+                    )
+                    all_transactions.extend(chunk_txns)
+                    # Share discovered categories with subsequent chunks so the LLM
+                    # reuses existing labels rather than inventing new ones
+                    for txn in chunk_txns:
+                        cat = txn.get("category")
+                        if cat and cat not in existing_categories:
+                            existing_categories.append(cat)
+                except Exception as e:
+                    logger.warning(f"  Skipped pages {label}: {e}")
+
+            logger.info(f"PDF parsing complete: {len(all_transactions)} transactions extracted")
+            return all_transactions
         
         transactions = []
         

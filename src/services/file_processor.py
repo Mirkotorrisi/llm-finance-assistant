@@ -51,34 +51,48 @@ class FileProcessor:
         
         logger.info(f"File validation passed: {filename}, size: {file_size} bytes")
     
+    # Number of PDF pages to send to the LLM in a single call.
+    # ~10 pages ≈ 15-25 k characters — well within GPT-4o-mini's context window.
+    PAGES_PER_CHUNK = 10
+
     @staticmethod
     def extract_from_pdf(file_content: BinaryIO) -> List[Dict[str, Any]]:
-        """Extract full text from PDF file for LLM-based parsing.
-        
-        Args:
-            file_content: Binary content of the PDF file
-            
-        Returns:
-            List containing a single dict with the full PDF text
+        """Extract text from a PDF and split it into page chunks for LLM parsing.
+
+        Returns one dict per chunk so that large PDFs are processed page-by-page
+        rather than truncated to the first N characters.
         """
         try:
             pdf_reader = PdfReader(file_content)
-            all_text = []
-            
-            # Extract text from all pages
+            pages_text = []
+
             for page in pdf_reader.pages:
                 text = page.extract_text()
-                if text:
-                    all_text.append(text)
-            
-            # Join all text
-            full_text = "\n".join(all_text)
-            
-            logger.info(f"Extracted {len(full_text)} characters from PDF")
-            
-            # Return full text for LLM-based parsing
-            return [{"pdf_text": full_text}]
-            
+                if text and text.strip():
+                    pages_text.append(text)
+
+            if not pages_text:
+                logger.warning("No extractable text found in PDF")
+                return []
+
+            chunk_size = FileProcessor.PAGES_PER_CHUNK
+            chunks = []
+            for i in range(0, len(pages_text), chunk_size):
+                chunk_pages = pages_text[i : i + chunk_size]
+                first = i + 1
+                last = min(i + chunk_size, len(pages_text))
+                chunks.append({
+                    "pdf_text": "\n\n--- page break ---\n\n".join(chunk_pages),
+                    "chunk_index": i // chunk_size,
+                    "pages": f"{first}-{last}",
+                })
+
+            logger.info(
+                f"PDF: {len(pages_text)} pages → {len(chunks)} chunk(s) "
+                f"of up to {chunk_size} pages each"
+            )
+            return chunks
+
         except Exception as e:
             logger.error(f"Error extracting PDF content: {str(e)}")
             raise FileValidationError(f"Failed to extract PDF content: {str(e)}")
