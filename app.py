@@ -18,24 +18,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Attempt to pre-connect to the MCP server. A failure here is non-fatal:
-    # the agent will retry lazily on the first incoming request.
-    try:
-        await get_mcp_client()
-        logger.info("MCP client connected on startup")
-    except Exception as e:
-        logger.warning(f"MCP startup connection failed, will retry on first request: {e}")
-        reset_mcp_client()
-
+    logger.info("Finance agent starting up — API client initialised lazily on first request")
     yield
-
-    # Best-effort disconnect on shutdown
-    try:
-        from src.workflow.mcp_client import _manager  # noqa: PLC0415
-        if _manager is not None:
-            await _manager.disconnect()
-    except Exception as e:
-        logger.warning(f"MCP disconnect on shutdown failed: {e}")
+    client = await get_mcp_client()
+    await client.disconnect()
+    reset_mcp_client()
+    logger.info("Finance agent shut down cleanly")
 
 app = FastAPI(
     title="Finance Assistant API",

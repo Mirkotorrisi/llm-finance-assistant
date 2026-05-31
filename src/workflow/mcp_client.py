@@ -1,18 +1,23 @@
 """
-A remote client for the MCP server, designed to be used by the agent workflow.
+API client for the finance-assistant-api service.
+
+Previously used the MCP-over-SSE protocol, replaced with direct async HTTP calls
+because the fastapi-mcp SSE handshake was incompatible with the mcp client library
+version, causing the initialize() call to hang indefinitely.
 """
 
 import os
-import asyncio
 from typing import Any, Dict, List, Optional
-from mcp import ClientSession
-from mcp.client.sse import sse_client
+
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MCP_SERVER_URL = os.getenv("MCP_SERVER_SSE_URL", "")
-MCP_SERVER_BASE_URL = os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8000")
+FINANCE_API_URL = os.getenv("FINANCE_API_URL", "http://localhost:8080")
+
+# Legacy env vars kept for backward compatibility with tests
+MCP_SERVER_BASE_URL = os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080")
 
 
 class RemoteMCPClient:
@@ -48,17 +53,21 @@ class RemoteMCPClient:
         return response.json()
 
     def add_transactions_bulk(self, transactions):
-        response = self.session.post(f"{self.base_url}/api/transactions/bulk", json=transactions)
+        response = self.session.post(
+            f"{self.base_url}/api/transactions/bulk", json=transactions
+        )
         response.raise_for_status()
         return response.json()
 
     def delete_transaction(self, transaction_id):
-        response = self.session.delete(f"{self.base_url}/api/transactions/{transaction_id}")
+        response = self.session.delete(
+            f"{self.base_url}/api/transactions/{transaction_id}"
+        )
         response.raise_for_status()
         return response.json()
 
     def get_balance(self):
-        response = self.session.get(f"{self.base_url}/api/balance")
+        response = self.session.get(f"{self.base_url}/api/transactions/balance")
         response.raise_for_status()
         return response.json().get("balance")
 
@@ -78,78 +87,104 @@ class RemoteMCPClient:
         return response.json()
 
 
-class MCPClientManager:
-    """Manager for the MCP connection via SSE."""
-    
-    def __init__(self, url: str):
-        self.url = url
-        self.session: Optional[ClientSession] = None
-        self._client_context = None
+class DirectAPIClient:
+    """Async HTTP client that talks directly to the finance-assistant-api REST endpoints.
 
-    async def connect(self):
-        """Initialize the SSE connection and MCP session."""
-        if self.session:
-            return
-            
-        self._client_context = sse_client(url=self.url)
-        read_stream, write_stream = await self._client_context.__aenter__()
-        
-        self.session = ClientSession(read_stream, write_stream)
-        await self.session.initialize()
-        print(f"✓ MCP highway opened towards: {self.url}")
+    Exposes a call_tool() interface identical to the old MCPClientManager so that
+    nodes.py and statements.py require no changes.
+    """
+
+    # Maps MCP-style tool names to (method, path_template) pairs.
+    # Path templates may contain {key} placeholders resolved from arguments.
+    _TOOL_MAP: Dict[str, tuple] = {
+        "list_transactions":     ("GET",    "/api/transactions"),
+        "add_transaction":       ("POST",   "/api/transactions"),
+        "add_transactions_bulk": ("POST",   "/api/transactions/bulk"),
+        "delete_transaction":    ("DELETE", "/api/transactions/{transaction_id}"),
+        "get_balance":           ("GET",    "/api/transactions/balance"),
+    }
+
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+        self._client: Optional[httpx.AsyncClient] = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url, timeout=30.0
+            )
+        return self._client
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
-        """Call any tool on the remote server."""
-        if not self.session:
-            await self.connect()
-        
-        # This is the standard MCP JSON-RPC call
-        result = await self.session.call_tool(tool_name, arguments)
-        return result.content
+        if tool_name not in self._TOOL_MAP:
+            raise ValueError(f"Unknown tool: {tool_name}")
 
-    async def list_tools(self):
-        """Get the list of available tools (Discovery)."""
-        if not self.session:
-            await self.connect()
-        return await self.session.list_tools()
+        method, path_template = self._TOOL_MAP[tool_name]
+        client = self._get_client()
+
+        # Resolve path placeholders (e.g. {transaction_id}) from arguments
+        path_args = {}
+        body_args = dict(arguments)
+        for key in _path_keys(path_template):
+            if key in body_args:
+                path_args[key] = body_args.pop(key)
+        path = path_template.format(**path_args)
+
+        if method == "GET":
+            resp = await client.get(path, params=body_args or None)
+        elif method == "POST":
+            # add_transactions_bulk expects a list at the root; everything else is a dict
+            json_body = body_args.get("transactions", body_args) if "transactions" in body_args else body_args
+            resp = await client.post(path, json=json_body)
+        elif method == "DELETE":
+            resp = await client.delete(path)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        resp.raise_for_status()
+        return resp.json()
 
     async def disconnect(self):
-        """Cleanly close MCP session and transport context."""
-        if self.session:
-            await self.session.__aexit__(None, None, None)
-            self.session = None
-        if self._client_context:
-            await self._client_context.__aexit__(None, None, None)
-            self._client_context = None
-
-# Singleton for the agent
-_manager = None
-_mcp_client = None
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
 
-def get_mcp_server():
-    """Backward-compatible singleton accessor for legacy imports/tests."""
+def _path_keys(template: str) -> List[str]:
+    """Return all {key} names in a path template."""
+    import re
+    return re.findall(r"\{(\w+)\}", template)
+
+
+# ── Singletons ────────────────────────────────────────────────────────────────
+
+_api_client: Optional[DirectAPIClient] = None
+_mcp_client: Optional[RemoteMCPClient] = None
+
+
+async def get_mcp_client() -> DirectAPIClient:
+    """Return the shared async API client (previously the MCP client)."""
+    global _api_client
+    if _api_client is None:
+        _api_client = DirectAPIClient(FINANCE_API_URL)
+    return _api_client
+
+
+def reset_mcp_client() -> None:
+    """Reset the async client singleton."""
+    global _api_client
+    _api_client = None
+
+
+def get_mcp_server() -> RemoteMCPClient:
+    """Backward-compatible synchronous client for legacy imports/tests."""
     global _mcp_client
     if _mcp_client is None:
         _mcp_client = RemoteMCPClient(MCP_SERVER_BASE_URL)
     return _mcp_client
 
 
-def reset_mcp_server():
-    """Backward-compatible singleton reset for legacy imports/tests."""
+def reset_mcp_server() -> None:
+    """Backward-compatible reset for legacy imports/tests."""
     global _mcp_client
     _mcp_client = None
-
-async def get_mcp_client():
-    global _manager
-    if _manager is None:
-        manager = MCPClientManager(MCP_SERVER_URL)
-        await manager.connect()  # if this raises, _manager stays None so the next call retries
-        _manager = manager
-    return _manager
-
-
-def reset_mcp_client():
-    """Reset the async MCP client singleton (useful after connection failure)."""
-    global _manager
-    _manager = None
