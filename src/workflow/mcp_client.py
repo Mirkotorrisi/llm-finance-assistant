@@ -103,6 +103,8 @@ class DirectAPIClient:
         "add_transactions_bulk":    ("POST",   "/api/transactions/bulk"),
         "delete_transaction":       ("DELETE", "/api/transactions/{transaction_id}"),
         "get_balance":              ("GET",    "/api/transactions/balance"),
+        "get_merchant_rules":       ("GET",    "/api/merchant-rules"),
+        "recategorize_transactions": ("POST",  "/api/merchant-rules/recategorize"),
     }
 
     def __init__(self, base_url: str):

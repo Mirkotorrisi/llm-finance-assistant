@@ -54,7 +54,7 @@ async def nlu_node(state: FinanceState) -> Dict:
     system_prompt = f"""You are an NLU engine for a personal finance assistant. Today is {today}.
 
 Extract the user's intent and parameters from their message, then return a JSON object with:
-- "action": one of "list", "add", "delete", "balance", "unknown"
+- "action": one of "list", "add", "delete", "balance", "recategorize", "unknown"
 - "parameters": an object with any of these optional fields:
   - "category" (string): spending category (e.g. "groceries", "transport", "salary")
   - "start_date" (string, YYYY-MM-DD): beginning of a date range
@@ -62,12 +62,15 @@ Extract the user's intent and parameters from their message, then return a JSON 
   - "amount" (number): transaction amount, positive for income, negative for expenses
   - "description" (string): text description of the transaction
   - "transaction_id" (integer): ID of a specific transaction
+  - "pattern" (string): merchant name / description pattern for recategorization
+  - "new_category" (string): target category for recategorization
 
 Action meanings:
 - "list": user wants to see transactions (optionally filtered by date, category, etc.)
 - "add": user wants to record a new transaction
 - "delete": user wants to remove a transaction
 - "balance": user wants to know their balance or financial summary
+- "recategorize": user wants to change the category of all transactions matching a description pattern (e.g. "all DECO transactions should be groceries")
 - "unknown": the intent is unclear or unrelated to finance
 
 Date resolution: convert relative dates to absolute YYYY-MM-DD. "last month" → first and last day of the previous calendar month. "this month" → first day of current month to today. "today" → {today}.
@@ -100,9 +103,23 @@ async def query_node(state: FinanceState) -> Dict:
         Action.LIST: "list_transactions",
         Action.ADD: "add_transaction",
         Action.DELETE: "delete_transaction",
-        Action.BALANCE: "get_balance"
+        Action.BALANCE: "get_balance",
     }
-    
+
+    if action == Action.RECATEGORIZE:
+        pattern = state["parameters"].pattern
+        new_category = state["parameters"].new_category
+        if not pattern or not new_category:
+            return {"query_results": {"error": "pattern and new_category are required for recategorize."}}
+        try:
+            results = await mcp_client.call_tool(
+                "recategorize_transactions",
+                {"pattern": pattern, "category": new_category},
+            )
+            return {"query_results": results}
+        except Exception as e:
+            return {"query_results": {"error": str(e)}}
+
     tool_name = mapping.get(action)
     if not tool_name:
         return {"query_results": {"error": "Unknown action, cannot map to tool."}}

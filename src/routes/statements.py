@@ -1,5 +1,6 @@
 """Statement upload and ingestion endpoints."""
 
+import asyncio
 import io
 import logging
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -32,14 +33,17 @@ async def upload_statement(file: UploadFile = File(...)) -> UploadStatementRespo
 
         mcp_client = await get_mcp_client()
 
-        # Fetch only the distinct categories (SELECT DISTINCT query on the API side).
-        # Much cheaper than downloading all transactions just to extract categories.
-        existing_categories: list[str] = await mcp_client.call_tool("get_distinct_categories", {})
+        # Fetch distinct categories and merchant rules in parallel
+        existing_categories, merchant_rules = await asyncio.gather(
+            mcp_client.call_tool("get_distinct_categories", {}),
+            mcp_client.call_tool("get_merchant_rules", {}),
+        )
 
         # All PDF chunks are parsed in parallel — total time = slowest single LLM call.
         transactions = await TransactionParser.parse_transactions_async(
             extracted_data,
             existing_categories,
+            merchant_rules,
         )
 
         if not transactions:

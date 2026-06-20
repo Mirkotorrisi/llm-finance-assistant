@@ -11,6 +11,7 @@ class Action(str, Enum):
     ADD = "add"
     DELETE = "delete"
     BALANCE = "balance"
+    RECATEGORIZE = "recategorize"
     UNKNOWN = "unknown"
 
 
@@ -22,6 +23,8 @@ class FinancialParameters(BaseModel):
     amount: Optional[float] = None
     description: Optional[str] = None
     transaction_id: Optional[int] = None
+    pattern: Optional[str] = None
+    new_category: Optional[str] = None
 
 
 class UserInput(BaseModel):

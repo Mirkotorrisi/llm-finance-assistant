@@ -170,10 +170,11 @@ class TransactionParser:
     
     @staticmethod
     def categorize_transaction_with_llm(
-        description: str, 
-        amount: float, 
+        description: str,
+        amount: float,
         existing_categories: List[str],
-        openai_client: Optional[OpenAI] = None
+        openai_client: Optional[OpenAI] = None,
+        merchant_rules: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """Categorize transaction using LLM based on description, amount, and existing categories.
         
@@ -189,13 +190,21 @@ class TransactionParser:
         Returns:
             Category name (either existing or newly created)
         """
+        # Check merchant rules before calling the LLM
+        if merchant_rules:
+            desc_lower = description.lower()
+            for rule in merchant_rules:
+                if rule["pattern"].lower() in desc_lower:
+                    logger.debug(f"Merchant rule matched '{rule['pattern']}' → '{rule['category']}' for '{description}'")
+                    return rule["category"]
+
         # Get or create OpenAI client
         if openai_client is None:
             openai_client = TransactionParser._get_openai_client()
             if openai_client is None:
                 logger.warning("OPENAI_API_KEY not set or client creation failed, falling back to rule-based categorization")
                 return TransactionParser._categorize_transaction_fallback(description, amount)
-        
+
         # Prepare the prompt for the LLM
         transaction_type = "income" if amount > 0 else "expense"
         
@@ -430,6 +439,7 @@ Rules:
     async def parse_transactions_async(
         rows: List[Dict[str, Any]],
         existing_categories: Optional[List[str]] = None,
+        merchant_rules: Optional[List[Dict[str, str]]] = None,
     ) -> List[Dict[str, Any]]:
         """Async version of parse_transactions for PDF chunks.
 
@@ -443,7 +453,7 @@ Rules:
         if not (rows and all("pdf_text" in row for row in rows)):
             # CSV/Excel: run the sync path in a thread to avoid blocking the event loop
             return await asyncio.to_thread(
-                TransactionParser.parse_transactions, rows, existing_categories
+                TransactionParser.parse_transactions, rows, existing_categories, merchant_rules
             )
 
         api_key = os.getenv("OPENAI_API_KEY")
@@ -466,9 +476,10 @@ Rules:
 
     @staticmethod
     def parse_row(
-        row: Dict[str, Any], 
+        row: Dict[str, Any],
         existing_categories: Optional[List[str]] = None,
-        openai_client: Optional[OpenAI] = None
+        openai_client: Optional[OpenAI] = None,
+        merchant_rules: Optional[List[Dict[str, str]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Parse a single row into transaction format.
         
@@ -550,7 +561,7 @@ Rules:
         
         if not category:
             category = TransactionParser.categorize_transaction_with_llm(
-                description, amount, existing_categories, openai_client
+                description, amount, existing_categories, openai_client, merchant_rules
             )
         
         return {
@@ -563,8 +574,9 @@ Rules:
     
     @staticmethod
     def parse_transactions(
-        rows: List[Dict[str, Any]], 
-        existing_categories: Optional[List[str]] = None
+        rows: List[Dict[str, Any]],
+        existing_categories: Optional[List[str]] = None,
+        merchant_rules: Optional[List[Dict[str, str]]] = None,
     ) -> List[Dict[str, Any]]:
         """Parse multiple rows into transactions.
         
@@ -616,9 +628,10 @@ Rules:
         for i, row in enumerate(rows):
             try:
                 transaction = TransactionParser.parse_row(
-                    row, 
+                    row,
                     existing_categories=existing_categories,
-                    openai_client=openai_client
+                    openai_client=openai_client,
+                    merchant_rules=merchant_rules,
                 )
                 if transaction:
                     transactions.append(transaction)
