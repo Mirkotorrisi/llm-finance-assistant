@@ -9,6 +9,7 @@ import uvicorn
 
 from src.routes.chat import router as chat_router
 from src.routes.core import router as core_router
+from src.routes.search import router as search_router
 from src.routes.statements import router as statements_router
 
 from src.workflow.mcp_client import get_mcp_client, reset_mcp_client
@@ -42,6 +43,7 @@ app.add_middleware(
 
 app.include_router(core_router)
 app.include_router(chat_router)
+app.include_router(search_router)
 app.include_router(statements_router)
 
 
