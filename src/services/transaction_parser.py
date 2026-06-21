@@ -440,12 +440,14 @@ Rules:
         rows: List[Dict[str, Any]],
         existing_categories: Optional[List[str]] = None,
         merchant_rules: Optional[List[Dict[str, str]]] = None,
+        on_chunk_done: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """Async version of parse_transactions for PDF chunks.
 
-        All chunks are sent to OpenAI in parallel via asyncio.gather — total time
+        All chunks are sent to OpenAI in parallel via asyncio.as_completed — total time
         equals the slowest single call instead of the sum of all calls.
         Falls back to the sync path for CSV/Excel rows.
+        on_chunk_done(completed, total) is called each time a chunk finishes.
         """
         if existing_categories is None:
             existing_categories = []
@@ -462,15 +464,25 @@ Rules:
             return []
 
         async_client = AsyncOpenAI(api_key=api_key)
-        logger.info(f"Parsing {len(rows)} PDF chunk(s) in parallel")
+        total = len(rows)
+        logger.info(f"Parsing {total} PDF chunk(s) in parallel")
 
         tasks = [
-            TransactionParser._parse_pdf_chunk_async(chunk, list(existing_categories), async_client)
+            asyncio.create_task(
+                TransactionParser._parse_pdf_chunk_async(chunk, list(existing_categories), async_client)
+            )
             for chunk in rows
         ]
-        results = await asyncio.gather(*tasks)
 
-        all_transactions: List[Dict[str, Any]] = [tx for chunk_txns in results for tx in chunk_txns]
+        all_transactions: List[Dict[str, Any]] = []
+        completed = 0
+        for future in asyncio.as_completed(tasks):
+            chunk_txns = await future
+            all_transactions.extend(chunk_txns)
+            completed += 1
+            if on_chunk_done is not None:
+                on_chunk_done(completed, total)
+
         logger.info(f"PDF parsing complete: {len(all_transactions)} transactions extracted")
         return all_transactions
 
