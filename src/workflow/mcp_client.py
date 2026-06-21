@@ -19,6 +19,8 @@ FINANCE_API_URL = os.getenv("FINANCE_API_URL", "http://localhost:8080")
 # Legacy env vars kept for backward compatibility with tests
 MCP_SERVER_BASE_URL = os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080")
 
+print(f"[mcp_client] FINANCE_API_URL = {FINANCE_API_URL}", flush=True)
+print(f"[mcp_client] MCP_SERVER_BASE_URL = {MCP_SERVER_BASE_URL}", flush=True)
 
 class RemoteMCPClient:
     """Backward-compatible synchronous HTTP client used by legacy imports/tests."""
