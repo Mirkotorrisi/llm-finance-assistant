@@ -15,12 +15,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 FINANCE_API_URL = os.getenv("FINANCE_API_URL", "http://localhost:8080")
+MCP_SERVER_URL = FINANCE_API_URL.rstrip("/") + "/mcp"
 
-# Legacy env vars kept for backward compatibility with tests
-MCP_SERVER_BASE_URL = os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080")
-
-print(f"[mcp_client] FINANCE_API_URL = {FINANCE_API_URL}", flush=True)
-print(f"[mcp_client] MCP_SERVER_BASE_URL = {MCP_SERVER_BASE_URL}", flush=True)
+print(f"[mcp_client] FINANCE_API_URL={FINANCE_API_URL}  MCP_SERVER_URL={MCP_SERVER_URL}", flush=True)
 
 class RemoteMCPClient:
     """Backward-compatible synchronous HTTP client used by legacy imports/tests."""
@@ -185,7 +182,7 @@ def get_mcp_server() -> RemoteMCPClient:
     """Backward-compatible synchronous client for legacy imports/tests."""
     global _mcp_client
     if _mcp_client is None:
-        _mcp_client = RemoteMCPClient(MCP_SERVER_BASE_URL)
+        _mcp_client = RemoteMCPClient(FINANCE_API_URL)
     return _mcp_client
 
 
