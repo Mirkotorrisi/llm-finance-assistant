@@ -1,7 +1,7 @@
 """Domain models for the finance assistant."""
 
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel
 
 
@@ -12,6 +12,7 @@ class Action(str, Enum):
     DELETE = "delete"
     BALANCE = "balance"
     RECATEGORIZE = "recategorize"
+    SMART_RECATEGORIZE = "smart_recategorize"
     UNKNOWN = "unknown"
 
 
@@ -25,6 +26,7 @@ class FinancialParameters(BaseModel):
     transaction_id: Optional[int] = None
     pattern: Optional[str] = None
     new_category: Optional[str] = None
+    new_categories: Optional[List[str]] = None
 
 
 class UserInput(BaseModel):

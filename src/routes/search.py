@@ -37,7 +37,7 @@ async def search_transaction(request: TransactionSearchRequest):
 
     try:
         response = await client.responses.create(
-            model="gpt-4o-mini-search-preview",
+            model="gpt-4o-mini",
             tools=[{"type": "web_search_preview"}],
             input=prompt,
         )

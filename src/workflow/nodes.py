@@ -54,7 +54,7 @@ async def nlu_node(state: FinanceState) -> Dict:
     system_prompt = f"""You are an NLU engine for a personal finance assistant. Today is {today}.
 
 Extract the user's intent and parameters from their message, then return a JSON object with:
-- "action": one of "list", "add", "delete", "balance", "recategorize", "unknown"
+- "action": one of "list", "add", "delete", "balance", "recategorize", "smart_recategorize", "unknown"
 - "parameters": an object with any of these optional fields:
   - "category" (string): spending category (e.g. "groceries", "transport", "salary")
   - "start_date" (string, YYYY-MM-DD): beginning of a date range
@@ -64,6 +64,7 @@ Extract the user's intent and parameters from their message, then return a JSON 
   - "transaction_id" (integer): ID of a specific transaction
   - "pattern" (string): merchant name / description pattern for recategorization
   - "new_category" (string): target category for recategorization
+  - "new_categories" (array of strings): list of new sub-categories for smart recategorization
 
 Action meanings:
 - "list": user wants to see transactions (optionally filtered by date, category, etc.)
@@ -71,6 +72,7 @@ Action meanings:
 - "delete": user wants to remove a transaction
 - "balance": user wants to know their balance or financial summary
 - "recategorize": user wants to change the category of all transactions matching a description pattern (e.g. "all DECO transactions should be groceries")
+- "smart_recategorize": user wants to split an existing category into multiple sub-categories, using AI to classify each transaction (e.g. "split food into groceries, restaurants, takeaway"). Requires "category" (source) and "new_categories" (list of targets).
 - "unknown": the intent is unclear or unrelated to finance
 
 Date resolution: convert relative dates to absolute YYYY-MM-DD. "last month" → first and last day of the previous calendar month. "this month" → first day of current month to today. "today" → {today}.
@@ -120,6 +122,9 @@ async def query_node(state: FinanceState) -> Dict:
         except Exception as e:
             return {"query_results": {"error": str(e)}}
 
+    if action == Action.SMART_RECATEGORIZE:
+        return await _smart_recategorize(state, mcp_client)
+
     tool_name = mapping.get(action)
     if not tool_name:
         return {"query_results": {"error": "Unknown action, cannot map to tool."}}
@@ -129,6 +134,92 @@ async def query_node(state: FinanceState) -> Dict:
         return {"query_results": results}
     except Exception as e:
         return {"query_results": {"error": str(e)}}
+
+
+async def _smart_recategorize(state: FinanceState, mcp_client) -> Dict:
+    """Fetch transactions by category and use LLM to classify each into sub-categories."""
+    category = state["parameters"].category
+    new_categories = state["parameters"].new_categories
+
+    if not category or not new_categories:
+        return {"query_results": {"error": "category and new_categories are required for smart_recategorize."}}
+
+    try:
+        transactions = await mcp_client.call_tool("list_transactions", {"category": category})
+    except Exception as e:
+        return {"query_results": {"error": f"Failed to fetch transactions: {e}"}}
+
+    if not isinstance(transactions, list) or len(transactions) == 0:
+        return {"query_results": {
+            "source_category": category,
+            "new_categories": new_categories,
+            "classified": [],
+            "ambiguous": [],
+        }}
+
+    tx_summary = [
+        {"id": t["id"], "description": t["description"], "amount": t["amount"]}
+        for t in transactions
+    ]
+
+    client = get_openai_client()
+    classification_prompt = f"""You are a financial transaction classifier.
+
+The transactions below all belong to the category "{category}".
+Reclassify each one into one of these new sub-categories: {json.dumps(new_categories)}.
+
+Rules:
+- If you are confident (≥85% sure) → assign the best matching category, set "uncertain": false
+- If you are not confident → set "uncertain": true and provide your best guess in "suggested_category"
+
+Return a JSON object with a single key "classifications" containing an array:
+{{"classifications": [
+  {{"transaction_id": <int>, "new_category": "<category_or_null>", "uncertain": <bool>, "suggested_category": "<category_or_null>"}}
+]}}
+
+Set "new_category" to null when uncertain. Set "suggested_category" to null when certain."""
+
+    try:
+        completion = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": classification_prompt},
+                {"role": "user", "content": f"Transactions:\n{json.dumps(tx_summary)}"},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        parsed = json.loads(completion.choices[0].message.content)
+        classifications = parsed.get("classifications", [])
+    except Exception as e:
+        return {"query_results": {"error": f"LLM classification failed: {e}"}}
+
+    tx_by_id = {t["id"]: t for t in transactions}
+    classified = []
+    ambiguous = []
+
+    for item in classifications:
+        tx_id = item.get("transaction_id")
+        tx = tx_by_id.get(tx_id, {})
+        enriched = {
+            "transaction_id": tx_id,
+            "description": tx.get("description", ""),
+            "amount": tx.get("amount", 0),
+            "date": tx.get("date", ""),
+        }
+        if item.get("uncertain"):
+            enriched["suggested_category"] = item.get("suggested_category")
+            ambiguous.append(enriched)
+        else:
+            enriched["new_category"] = item.get("new_category")
+            classified.append(enriched)
+
+    return {"query_results": {
+        "source_category": category,
+        "new_categories": new_categories,
+        "classified": classified,
+        "ambiguous": ambiguous,
+    }}
 
 
 async def ui_planner_node(state: FinanceState) -> Dict:
@@ -174,6 +265,27 @@ async def ui_planner_node(state: FinanceState) -> Dict:
                     "type": "SummaryCards",
                     "order": 0,
                     "title": "Financial Summary",
+                }
+            ],
+        }
+    elif action == Action.SMART_RECATEGORIZE and isinstance(results, dict) and "classified" in results:
+        ui_metadata = {
+            "text": "",
+            "components": [
+                {
+                    "type": "RecategorizationReview",
+                    "order": 0,
+                    "title": "Rivedi la classificazione",
+                    "action": {
+                        "service": "transactions",
+                        "method": "bulkUpdateCategories",
+                        "params": {
+                            "sourceCategory": results["source_category"],
+                            "newCategories": results["new_categories"],
+                            "classified": results["classified"],
+                            "ambiguous": results["ambiguous"],
+                        },
+                    },
                 }
             ],
         }
