@@ -13,6 +13,7 @@ class Action(str, Enum):
     BALANCE = "balance"
     RECATEGORIZE = "recategorize"
     SMART_RECATEGORIZE = "smart_recategorize"
+    ONBOARDING = "onboarding"
     UNKNOWN = "unknown"
 
 

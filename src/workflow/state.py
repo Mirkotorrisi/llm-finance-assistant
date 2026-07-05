@@ -14,3 +14,7 @@ class FinanceState(TypedDict):
     ui_metadata: Optional[dict]
     response: Optional[str]
     history: List[str]
+    user_id: str
+    user_context: Optional[dict]
+    needs_onboarding: bool
+    onboarding_result: Optional[dict]

@@ -104,6 +104,9 @@ class DirectAPIClient:
         "get_balance":              ("GET",    "/api/transactions/balance"),
         "get_merchant_rules":       ("GET",    "/api/merchant-rules"),
         "recategorize_transactions": ("POST",  "/api/merchant-rules/recategorize"),
+        "get_user_preferences":     ("GET",    "/api/preferences/{user_id}"),
+        "update_user_preferences":  ("PUT",    "/api/preferences/{user_id}"),
+        "confirm_user_preferences": ("POST",   "/api/preferences/{user_id}/confirm"),
     }
 
     def __init__(self, base_url: str):
@@ -138,6 +141,8 @@ class DirectAPIClient:
             # add_transactions_bulk expects a list at the root; everything else is a dict
             json_body = body_args.get("transactions", body_args) if "transactions" in body_args else body_args
             resp = await client.post(path, json=json_body)
+        elif method == "PUT":
+            resp = await client.put(path, json=body_args)
         elif method == "DELETE":
             resp = await client.delete(path)
         else:

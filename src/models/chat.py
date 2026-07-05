@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
     is_audio: bool = False
     audio_data: Union[str, None] = None
     history: List[str] = []
+    user_id: str = "anonymous"
 
 
 class ChatResponse(BaseModel):
@@ -47,6 +48,8 @@ class ChatPlanRequest(BaseModel):
     """
 
     messages: List[Message]
+    history: List[str] = []
+    user_id: str = "anonymous"
 
 
 class UIPlanAction(BaseModel):
@@ -78,3 +81,4 @@ class ChatPlanResponse(BaseModel):
 
     text: str
     plan: Optional[UIPlan] = None
+    history: List[str] = []

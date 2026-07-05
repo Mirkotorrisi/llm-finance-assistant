@@ -74,15 +74,16 @@ async def websocket_chat(websocket: WebSocket):
                 message = message_data.get("message", "")
                 is_audio = message_data.get("is_audio", False)
                 audio_data = message_data.get("audio_data")
+                user_id = message_data.get("user_id", "anonymous")
 
                 user_input_text = message
-                
+
                 if is_audio and audio_data:
                     with temporary_audio_file(audio_data) as temp_path:
                         user_input_text = temp_path
-                        await _run_and_send(websocket, assistant_graph, user_input_text, is_audio, history)
+                        await _run_and_send(websocket, assistant_graph, user_input_text, is_audio, history, user_id)
                 else:
-                    await _run_and_send(websocket, assistant_graph, user_input_text, False, history)
+                    await _run_and_send(websocket, assistant_graph, user_input_text, False, history, user_id)
 
             except json.JSONDecodeError:
                 await websocket.send_json({"error": "Invalid JSON format"})
@@ -107,6 +108,10 @@ async def chat_endpoint(request: ChatRequest):
         "ui_metadata": None,
         "response": None,
         "history": request.history,
+        "user_id": request.user_id,
+        "user_context": None,
+        "needs_onboarding": False,
+        "onboarding_result": None,
     }
 
     try:
@@ -130,9 +135,9 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _run_and_send(websocket, graph, text_or_path, is_audio, history):
+async def _run_and_send(websocket, graph, text_or_path, is_audio, history, user_id="anonymous"):
     """Helper function to run the assistant graph and send the response back to the client."""
-    
+
     state: FinanceState = {
         "input": UserInput(text=text_or_path, is_audio=is_audio),
         "transcription": None,
@@ -142,6 +147,10 @@ async def _run_and_send(websocket, graph, text_or_path, is_audio, history):
         "ui_metadata": None,
         "response": None,
         "history": history,
+        "user_id": user_id,
+        "user_context": None,
+        "needs_onboarding": False,
+        "onboarding_result": None,
     }
 
     # NOTE: We use AINVOKE because the nodes (NLU, Query, Generator) are asynchronous
@@ -230,7 +239,11 @@ async def chat_plan_endpoint(request: ChatPlanRequest):
         "query_results": None,
         "ui_metadata": None,
         "response": None,
-        "history": [],
+        "history": request.history,
+        "user_id": request.user_id,
+        "user_context": None,
+        "needs_onboarding": False,
+        "onboarding_result": None,
     }
 
     try:
@@ -251,7 +264,7 @@ async def chat_plan_endpoint(request: ChatPlanRequest):
 
         plan = _build_ui_plan(text, ui_data) if ui_data else None
 
-        return ChatPlanResponse(text=text, plan=plan)
+        return ChatPlanResponse(text=text, plan=plan, history=result.get("history", []))
     except HTTPException:
         raise
     except Exception as e:
