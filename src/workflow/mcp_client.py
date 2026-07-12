@@ -104,6 +104,7 @@ class DirectAPIClient:
         "get_balance":              ("GET",    "/api/transactions/balance"),
         "get_merchant_rules":       ("GET",    "/api/merchant-rules"),
         "recategorize_transactions": ("POST",  "/api/merchant-rules/recategorize"),
+        "update_transactions_bulk_category": ("PUT", "/api/transactions/bulk-category"),
         "get_user_preferences":     ("GET",    "/api/preferences/{user_id}"),
         "update_user_preferences":  ("PUT",    "/api/preferences/{user_id}"),
         "confirm_user_preferences": ("POST",   "/api/preferences/{user_id}/confirm"),

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+from src.routes.amazon import router as amazon_router
 from src.routes.chat import router as chat_router
 from src.routes.core import router as core_router
 from src.routes.search import router as search_router
@@ -45,6 +46,7 @@ app.include_router(core_router)
 app.include_router(chat_router)
 app.include_router(search_router)
 app.include_router(statements_router)
+app.include_router(amazon_router)
 
 
 if __name__ == "__main__":
