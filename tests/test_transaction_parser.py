@@ -130,3 +130,27 @@ class TestRowParsing:
         result = TransactionParser.parse_row(row)
         
         assert result is None
+
+
+class TestItalianHeaders:
+    def test_a_typical_italian_bank_csv_is_read(self):
+        row = {"Data": "05/03/2026", "Descrizione": "PAGAMENTO POS COOP", "Importo": "-54,20", "Valuta": "EUR"}
+        result = TransactionParser.parse_row(row)
+        assert result["date"] == "2026-03-05"
+        assert result["description"] == "PAGAMENTO POS COOP"
+        assert result["amount"] == -54.20
+        assert result["currency"] == "EUR"
+
+    def test_other_common_variants(self):
+        for date_key, desc_key, amount_key in [
+            ("Data operazione", "Causale", "Importo (EUR)"),
+            ("Data contabile", "Descrizione operazione", "Importo EUR"),
+            ("DATA VALUTA", "DETTAGLI", "IMPORTO"),
+        ]:
+            result = TransactionParser.parse_row({date_key: "2026-03-05", desc_key: "Bar", amount_key: "-3,50"})
+            assert result is not None, (date_key, desc_key, amount_key)
+            assert result["amount"] == -3.50
+
+    def test_a_category_column_in_italian_is_kept(self):
+        row = {"Data": "2026-03-05", "Descrizione": "Bar", "Importo": "-3", "Categoria": "Svago"}
+        assert TransactionParser.parse_row(row)["category"] == "svago"

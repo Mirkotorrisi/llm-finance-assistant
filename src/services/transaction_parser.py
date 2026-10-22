@@ -401,11 +401,15 @@ class TransactionParser:
         
         # Handle structured data (CSV/Excel)
         # Try to find date, description, and amount fields with various common names
-        date_fields = ['date', 'transaction date', 'booking date', 'value date']
-        description_fields = ['description', 'details', 'memo', 'narrative', 'transaction details']
-        amount_fields = ['amount', 'value', 'debit', 'credit', 'transaction amount']
-        currency_fields = ['currency', 'ccy']
-        category_fields = ['category', 'type', 'transaction type']
+        # English headers, plus the ones Italian banks most often use
+        date_fields = ['date', 'transaction date', 'booking date', 'value date',
+                       'data', 'data operazione', 'data contabile', 'data movimento', 'data valuta']
+        description_fields = ['description', 'details', 'memo', 'narrative', 'transaction details',
+                              'descrizione', 'descrizione operazione', 'descrizione movimento', 'causale', 'dettagli', 'dettaglio']
+        amount_fields = ['amount', 'value', 'debit', 'credit', 'transaction amount',
+                         'importo', 'importo (eur)', 'importo eur', 'importo in eur', 'importo €']
+        currency_fields = ['currency', 'ccy', 'valuta', 'divisa']
+        category_fields = ['category', 'type', 'transaction type', 'categoria']
         
         # Find fields (case-insensitive)
         row_lower = {k.lower().strip(): v for k, v in row.items() if v is not None}
