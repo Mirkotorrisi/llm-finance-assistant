@@ -16,6 +16,18 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+_PDF_EXTRACT_PROMPT = """You are a financial document parsing expert.
+Extract all financial transactions from the bank statement text provided.
+
+Rules:
+- Only extract clear, identifiable transactions
+- Dates must be in ISO format (YYYY-MM-DD)
+- Amounts are negative for expenses/debits, positive for income/credits
+- Keep the description as printed on the statement
+- Default currency to EUR if not specified
+- Do not categorize: categories are decided later"""
+
+
 class _ParsedTransaction(BaseModel):
     date: str
     description: str
@@ -26,6 +38,17 @@ class _ParsedTransaction(BaseModel):
 
 class _ParsedTransactionList(BaseModel):
     transactions: List[_ParsedTransaction]
+
+
+class _ExtractedTransaction(BaseModel):
+    date: str
+    description: str
+    amount: float
+    currency: str = "EUR"
+
+
+class _ExtractedTransactionList(BaseModel):
+    transactions: List[_ExtractedTransaction]
 
 
 _PDF_SYSTEM_PROMPT = """You are a financial document parsing expert.
@@ -207,8 +230,11 @@ class TransactionParser:
         chunk: Dict[str, Any],
         existing_categories: List[str],
         llm: LLMClient,
+        with_category: bool = True,
     ) -> List[Dict[str, Any]]:
-        """Parse a single PDF chunk with the configured LLM (used by parse_transactions_async)."""
+        """Parse a single PDF chunk with the configured LLM (used by parse_transactions_async).
+
+        ``with_category=False`` only extracts: categories are decided later, against the project's blueprint."""
         label = chunk.get("pages", f"chunk {chunk.get('chunk_index', '?')}")
         truncated = chunk["pdf_text"][: TransactionParser.MAX_PDF_TEXT_LENGTH]
 
@@ -223,6 +249,12 @@ class TransactionParser:
         )
 
         try:
+            if not with_category:
+                text = f"Bank statement text:\n\n{truncated}"
+                extracted = await llm.structured(_PDF_EXTRACT_PROMPT, text, _ExtractedTransactionList, temperature=0.1)
+                rows = [t.model_dump() for t in extracted.transactions]
+                logger.info(f"Chunk {label}: {len(rows)} transactions extracted")
+                return rows
             parsed = await llm.structured(_PDF_SYSTEM_PROMPT, user_prompt, _ParsedTransactionList, temperature=0.1)
             valid = [t.model_dump() for t in parsed.transactions]
             logger.info(f"Chunk {label}: {len(valid)} transactions extracted")
@@ -264,6 +296,44 @@ class TransactionParser:
 
         logger.info(f"Parsed {len(transactions)} transactions from {len(rows)} rows")
         return transactions
+
+    @staticmethod
+    async def extract_async(
+        rows: List[Dict[str, Any]],
+        on_chunk_done: Optional[Any] = None,
+        llm: Optional[LLMClient] = None,
+    ) -> List[Dict[str, Any]]:
+        """Read the transactions out of an uploaded file without deciding their categories.
+
+        CSV/Excel rows are parsed locally (a category column in the file is kept, as ``category``); PDF chunks are
+        sent to the LLM in parallel. The result goes to ``classify_for_import``.
+        """
+        if not (rows and all("pdf_text" in row for row in rows)):
+            out: List[Dict[str, Any]] = []
+            for i, row in enumerate(rows):
+                try:
+                    transaction = TransactionParser.parse_row(row)
+                except Exception as e:
+                    logger.warning(f"Error parsing row {i}: {str(e)}")
+                    continue
+                if transaction:
+                    out.append(transaction)
+            return out
+
+        llm = llm or get_llm_client()
+        total = len(rows)
+        tasks = [
+            asyncio.create_task(TransactionParser._parse_pdf_chunk_async(chunk, [], llm, with_category=False))
+            for chunk in rows
+        ]
+        extracted: List[Dict[str, Any]] = []
+        completed = 0
+        for future in asyncio.as_completed(tasks):
+            extracted.extend(await future)
+            completed += 1
+            if on_chunk_done is not None:
+                on_chunk_done(completed, total)
+        return extracted
 
     @staticmethod
     async def parse_transactions_async(

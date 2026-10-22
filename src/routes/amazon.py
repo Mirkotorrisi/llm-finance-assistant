@@ -11,6 +11,9 @@ from fastapi import APIRouter, BackgroundTasks, File, Header, HTTPException, Upl
 from src.services.amazon_order_parser import AmazonCsvError, AmazonOrderParser
 from src.services.file_processor import FileProcessor, FileValidationError
 from src.api_client import get_api_client, request_context
+from src.llm import get_llm_client
+from src.llm.classify import leaf_categories
+from src.services.classification import classify_orders
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/amazon", tags=["amazon"])
@@ -72,10 +75,18 @@ async def _run_amazon_job(job_id: str, file_content: bytes) -> None:
             return
 
         _jobs[job_id]["step"] = "categorizing"
-        existing_categories = await api_client.call_tool("get_distinct_categories", {})
-        categories_by_order = await AmazonOrderParser.categorize_orders_with_llm(
-            matched, list(existing_categories)
-        )
+        blueprint = (await api_client.call_tool("get_blueprint", {})).get("blueprint", {})
+        confidences: Dict[str, float] = {}
+        if leaf_categories(blueprint):
+            # a project with a blueprint: the model may only pick its categories, and says how sure it is
+            answers = await classify_orders(get_llm_client(), matched, blueprint)
+            categories_by_order = {order_id: a.category for order_id, a in answers.items()}
+            confidences = {order_id: a.confidence for order_id, a in answers.items()}
+        else:
+            existing_categories = await api_client.call_tool("get_distinct_categories", {})
+            categories_by_order = await AmazonOrderParser.categorize_orders_with_llm(
+                matched, list(existing_categories)
+            )
 
         updates = []
         summary = []
@@ -83,7 +94,11 @@ async def _run_amazon_job(job_id: str, file_content: bytes) -> None:
             new_category = categories_by_order.get(m["order_id"])
             if not new_category:
                 continue
-            updates.append({"transaction_id": m["transaction"]["id"], "category": new_category})
+            # the model's pick is a suggestion until the user confirms it in the review queue
+            updates.append({
+                "transaction_id": m["transaction"]["id"], "category": new_category,
+                "source": "ai", "confidence": confidences.get(m["order_id"]),
+            })
             summary.append(
                 {
                     "order_id": m["order_id"],

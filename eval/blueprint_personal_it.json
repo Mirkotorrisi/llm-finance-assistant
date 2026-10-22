@@ -1,0 +1,248 @@
+{
+ "schema_version": 1,
+ "name": "Budget personale",
+ "description": "Spese di tutti i giorni divise in essenziali e minchiate.",
+ "currency": "EUR",
+ "instructions": "Spese discrezionali: ristoranti, abbonamenti, shopping e viaggi. Il resto è essenziale.",
+ "categories": [
+  {
+   "key": "home",
+   "label": "Casa",
+   "description": "",
+   "examples": [],
+   "aliases": [],
+   "kind": "expense",
+   "attributes": {},
+   "children": [
+    {
+     "key": "rent_mortgage",
+     "label": "Affitto / mutuo",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    },
+    {
+     "key": "utilities",
+     "label": "Utenze",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    },
+    {
+     "key": "home_maintenance",
+     "label": "Manutenzione casa",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    }
+   ]
+  },
+  {
+   "key": "food",
+   "label": "Alimentari",
+   "description": "",
+   "examples": [],
+   "aliases": [],
+   "kind": "expense",
+   "attributes": {},
+   "children": [
+    {
+     "key": "groceries",
+     "label": "Spesa",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    }
+   ]
+  },
+  {
+   "key": "transport",
+   "label": "Trasporti",
+   "description": "",
+   "examples": [],
+   "aliases": [],
+   "kind": "expense",
+   "attributes": {},
+   "children": [
+    {
+     "key": "fuel",
+     "label": "Carburante",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    },
+    {
+     "key": "public_transport",
+     "label": "Mezzi pubblici",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    },
+    {
+     "key": "car",
+     "label": "Auto (assicurazione, bollo, manutenzione)",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    }
+   ]
+  },
+  {
+   "key": "health",
+   "label": "Salute",
+   "description": "",
+   "examples": [],
+   "aliases": [],
+   "kind": "expense",
+   "attributes": {},
+   "children": []
+  },
+  {
+   "key": "leisure",
+   "label": "Svago",
+   "description": "",
+   "examples": [],
+   "aliases": [],
+   "kind": "expense",
+   "attributes": {},
+   "children": [
+    {
+     "key": "dining_out",
+     "label": "Ristoranti e bar",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    },
+    {
+     "key": "subscriptions",
+     "label": "Abbonamenti",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    },
+    {
+     "key": "shopping",
+     "label": "Shopping",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    },
+    {
+     "key": "travel",
+     "label": "Viaggi",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "expense",
+     "attributes": {},
+     "children": []
+    }
+   ]
+  },
+  {
+   "key": "savings",
+   "label": "Risparmio e investimenti",
+   "description": "",
+   "examples": [],
+   "aliases": [],
+   "kind": "expense",
+   "attributes": {},
+   "children": []
+  },
+  {
+   "key": "income",
+   "label": "Entrate",
+   "description": "",
+   "examples": [],
+   "aliases": [],
+   "kind": "income",
+   "attributes": {},
+   "children": [
+    {
+     "key": "salary",
+     "label": "Stipendio",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "income",
+     "attributes": {},
+     "children": []
+    },
+    {
+     "key": "other_income",
+     "label": "Altre entrate",
+     "description": "",
+     "examples": [],
+     "aliases": [],
+     "kind": "income",
+     "attributes": {},
+     "children": []
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "key": "essentials",
+   "label": "Essenziali",
+   "description": "",
+   "members": [
+    "home",
+    "food",
+    "transport",
+    "health"
+   ]
+  },
+  {
+   "key": "discretionary",
+   "label": "Minchiate",
+   "description": "",
+   "members": [
+    "leisure"
+   ]
+  }
+ ],
+ "dimensions": [],
+ "reports": [
+  {
+   "key": "discretionary_spending",
+   "label": "Le minchiate",
+   "group": "discretionary",
+   "categories": []
+  }
+ ],
+ "rules": [],
+ "settings": {
+  "detect_transfers": true
+ }
+}

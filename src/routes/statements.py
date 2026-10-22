@@ -1,6 +1,5 @@
 """Statement upload and ingestion endpoints."""
 
-import asyncio
 import hashlib
 import io
 import logging
@@ -11,7 +10,9 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, File, Form, Header, HTTPException, UploadFile
 
 from src.api_client import get_api_client, request_context
+from src.llm import get_llm_client
 from src.services import FileProcessor, FileValidationError, TransactionParser
+from src.services.classification import classify_for_import
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/statements", tags=["statements"])
@@ -56,11 +57,6 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
 
         api_client = await get_api_client()
 
-        existing_categories, merchant_rules = await asyncio.gather(
-            api_client.call_tool("get_distinct_categories", {}),
-            api_client.call_tool("get_merchant_rules", {}),
-        )
-
         is_pdf = extracted_data and all("pdf_text" in r for r in extracted_data)
         _jobs[job_id].update({
             "step": "parsing",
@@ -72,12 +68,7 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
             _jobs[job_id]["completed_chunks"] = completed
             _jobs[job_id]["total_chunks"] = total
 
-        transactions = await TransactionParser.parse_transactions_async(
-            extracted_data,
-            existing_categories,
-            merchant_rules,
-            on_chunk_done=on_chunk_done,
-        )
+        transactions = await TransactionParser.extract_async(extracted_data, on_chunk_done=on_chunk_done)
 
         if not transactions:
             _jobs[job_id] = {
@@ -92,6 +83,10 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
                 },
             }
             return
+
+        # Saved merchant rules decide first, then the bank's own column, then the model (limited to the blueprint)
+        _jobs[job_id]["step"] = "categorizing"
+        transactions = await classify_for_import(transactions, api_client, get_llm_client())
 
         _jobs[job_id]["step"] = "saving"
 
@@ -125,6 +120,8 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
                 "transfers_detected": imported["transfers_detected"],
                 "duplicate_file": imported["duplicate_file"],
                 "invalid_rows": imported["invalid_rows"],
+                # automatic categories are suggestions: these are waiting in the review queue
+                "needs_review": sum(1 for t in imported["transactions"] if not t.get("reviewed")),
             },
         }
 

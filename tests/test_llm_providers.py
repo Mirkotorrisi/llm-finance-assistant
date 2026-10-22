@@ -316,3 +316,13 @@ def test_search_route_uses_the_configured_provider(monkeypatch):
     monkeypatch.setattr("src.routes.search.get_llm_client", lambda: Down(None))
     bad = TestClient(app).post("/search-transaction", json={"description": "x"})
     assert bad.status_code == 500 and "no key" in bad.json()["detail"]
+
+
+def test_the_test_suite_cannot_reach_a_real_llm():
+    """tests/conftest.py points the Claude binary nowhere and removes the OpenAI key."""
+    from src.llm import get_llm_client
+
+    client = get_llm_client()
+    assert client.name == "claude"
+    with pytest.raises(LLMError, match="Cannot start"):
+        run(client.structured("s", "u", Items))

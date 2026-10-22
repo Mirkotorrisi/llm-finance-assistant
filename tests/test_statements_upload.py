@@ -23,6 +23,7 @@ class FakeApi:
         self.rules = rules or []
         self.import_requests: list[dict] = []
         self.scopes: list[dict] = []
+        self.blueprint: dict = {}  # no blueprint unless a test sets one
 
     async def call_tool(self, name, args):
         self.scopes.append(scope_headers())
@@ -30,6 +31,14 @@ class FakeApi:
             return sorted({t["category"] for t in self.transactions})
         if name == "get_merchant_rules":
             return self.rules
+        if name == "get_blueprint":
+            return {"blueprint": self.blueprint}
+        if name == "resolve_merchants":
+            found = []
+            for description in args["descriptions"]:
+                rule = next((r for r in self.rules if r["pattern"].lower() in description.lower()), None)
+                found.append({"description": description, "category": rule["category"] if rule else None})
+            return found
         if name == "import_statement":
             self.import_requests.append(args)
             stored = Counter((t["date"], t["amount"], t["description"]) for t in self.transactions)
@@ -39,7 +48,11 @@ class FakeApi:
                 key = (row["date"], row["amount"], row["description"])
                 seen[key] += 1
                 if seen[key] > stored[key]:
-                    added.append({**row, "id": len(self.transactions) + len(added) + 1, "account_id": args["account_id"]})
+                    source = row.get("category_source", "file")
+                    added.append({
+                        **row, "id": len(self.transactions) + len(added) + 1, "account_id": args["account_id"],
+                        "reviewed": source in ("user", "rule"),
+                    })
             self.transactions.extend(added)
             return {
                 "batch_id": 1 if added else None,
@@ -64,13 +77,18 @@ class StubLLM(LLMClient):
         self.prompts.append(user)
         if self.fail:
             raise LLMError("provider down")
+        constrained = "Transactions:\n" in user  # the blueprint classifier's prompt (vs the free-text categorizer's)
+        listing = user.split("Transactions:\n" if constrained else "Items:\n")[1]
         items = []
-        for line in user.split("Items:\n")[1].splitlines():
+        for line in listing.splitlines():
             if ")" not in line.split(" ")[0]:
                 continue
             index, text = line.split(") ", 1)
-            category = next((c for key, c in self.categories.items() if key in text), "other")
-            items.append({"index": int(index), "category": category})
+            category = next((c for key, c in self.categories.items() if key in text), "unknown" if constrained else "other")
+            item = {"index": int(index), "category": category}
+            if constrained:
+                item["confidence"] = 0.9
+            items.append(item)
         return schema.model_validate({"items": items})
 
     async def web_search(self, prompt):
@@ -87,6 +105,7 @@ def env(monkeypatch):
 
     monkeypatch.setattr("src.routes.statements.get_api_client", fake_get_api_client)
     monkeypatch.setattr("src.services.transaction_parser.get_llm_client", lambda: llm)
+    monkeypatch.setattr("src.routes.statements.get_llm_client", lambda: llm)
     return TestClient(app), api, llm
 
 
@@ -199,3 +218,26 @@ def test_an_api_rejection_becomes_a_readable_job_error(env, monkeypatch):
     monkeypatch.setattr(api, "call_tool", reject)
     job = upload(client, "statement.csv", CSV, account_id=9)
     assert job["status"] == "error" and job["error"] == "Account 9 not found in this workspace"
+
+
+BLUEPRINT = {
+    "instructions": "Pizzerie e trattorie sono minchiate.",
+    "categories": [
+        {"key": "casa", "label": "Casa", "children": [{"key": "spesa", "label": "Spesa", "examples": ["Coop"]}]},
+        {"key": "svago", "label": "Svago", "children": [{"key": "ristoranti", "label": "Ristoranti"}]},
+        {"key": "stipendio", "label": "Stipendio", "kind": "income"},
+    ],
+}
+
+
+def test_with_a_blueprint_the_model_is_limited_to_its_categories_and_answers_wait_for_review(env):
+    client, api, llm = env
+    api.blueprint = BLUEPRINT
+    llm.categories = {"Grocery": "spesa", "Salary": "stipendio"}
+    job = upload(client, "statement.csv", CSV)
+    assert job["status"] == "complete"
+    sent = {r["description"]: r for r in api.import_requests[0]["transactions"]}
+    assert (sent["NETFLIX.COM"]["category"], sent["NETFLIX.COM"]["category_source"]) == ("subscriptions", "rule")  # confirmed rule
+    assert (sent["Test Grocery"]["category"], sent["Test Grocery"]["category_source"]) == ("spesa", "ai")
+    assert sent["Test Grocery"]["confidence"] is not None
+    assert job["result"]["needs_review"] == 2  # the two model answers; the rule is already confirmed

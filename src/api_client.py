@@ -59,6 +59,8 @@ class FinanceApiClient:
         "update_user_preferences":  ("PUT",    "/api/preferences/{user_id}"),
         "confirm_user_preferences": ("POST",   "/api/preferences/{user_id}/confirm"),
         "import_statement":         ("POST",   "/api/imports"),
+        "resolve_merchants":        ("POST",   "/api/merchant-rules/resolve"),
+        "get_blueprint":            ("GET",    "/api/workspaces/current/blueprint"),
     }
 
     def __init__(self, base_url: str):
