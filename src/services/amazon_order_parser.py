@@ -7,16 +7,15 @@ purchased — instead of leaving every Amazon charge tagged as generic
 'shopping'.
 """
 
-import asyncio
 import csv
 import io
 import logging
-import os
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from openai import AsyncOpenAI
-from pydantic import BaseModel
+
+from src.llm import LLMClient, get_llm_client
+from src.llm.categorize import categorize_orders
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +36,6 @@ class AmazonCsvError(Exception):
     """Raised when the uploaded file isn't a valid Amazon order-history export."""
 
     pass
-
-
-class _ParsedOrderCategory(BaseModel):
-    category: str
-    is_new: bool
-    reasoning: str
 
 
 class AmazonOrderParser:
@@ -213,90 +206,23 @@ class AmazonOrderParser:
         return matched, unmatched
 
     @staticmethod
-    async def _categorize_order_async(
-        order_id: str,
-        products: List[str],
-        existing_categories: List[str],
-        async_client: AsyncOpenAI,
-    ) -> Optional[str]:
-        existing_categories_text = (
-            "None - this is the first transaction"
-            if not existing_categories
-            else ", ".join(existing_categories)
-        )
-        products_text = "\n".join(f"- {p}" for p in products[:20])
-
-        system_prompt = """You are a financial transaction categorization expert.
-Your job is to assign a single category label to an Amazon order based on the products purchased.
-
-Rules:
-1. If the order clearly fits into one of the existing categories, use that category exactly as it appears.
-2. Only create a NEW category if the order doesn't fit well into any existing category.
-3. Category labels should be short (1-2 words), lowercase, and descriptive.
-4. Prefer a specific category (e.g. groceries, baby, electronics, clothing, home, health, books, toys) over a generic 'shopping' label whenever the products suggest one.
-5. If the order mixes unrelated products, choose the category of the most dominant/expensive item."""
-
-        user_prompt = (
-            f"Products purchased in this Amazon order:\n{products_text}\n\n"
-            f"Existing categories: {existing_categories_text}\n\n"
-            f"Assign the single most appropriate category for this order."
-        )
-
-        try:
-            completion = await async_client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format=_ParsedOrderCategory,
-                temperature=0.3,
-            )
-            parsed = completion.choices[0].message.parsed
-            if parsed is None:
-                raise ValueError("Structured output returned None")
-            if parsed.is_new:
-                logger.info(
-                    f"Order {order_id}: LLM created new category '{parsed.category}' ({parsed.reasoning})"
-                )
-            return parsed.category.lower().strip()
-        except Exception as e:
-            logger.warning(f"Order {order_id}: LLM categorization failed: {str(e)}")
-            return None
-
-    @staticmethod
     async def categorize_orders_with_llm(
         matched_orders: List[Dict[str, Any]],
         existing_categories: List[str],
+        llm: Optional[LLMClient] = None,
     ) -> Dict[str, str]:
-        """Categorize each matched order's products via the LLM, in parallel.
+        """Categorize each matched order's products via the configured LLM, in batches.
 
-        Returns {order_id: category}. Orders whose LLM call fails are omitted,
+        Returns {order_id: category}. Orders the LLM does not answer for are omitted,
         leaving their transaction's category untouched.
         """
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not set — cannot categorize Amazon orders")
+        if not matched_orders:
             return {}
+        llm = llm or get_llm_client()
 
-        async_client = AsyncOpenAI(api_key=api_key)
-
-        tasks = [
-            (
-                m["order_id"],
-                asyncio.create_task(
-                    AmazonOrderParser._categorize_order_async(
-                        m["order_id"], m["products"], existing_categories, async_client
-                    )
-                ),
-            )
-            for m in matched_orders
-        ]
-
-        results: Dict[str, str] = {}
-        for order_id, task in tasks:
-            category = await task
-            if category:
-                results[order_id] = category
-
-        return results
+        categories = await categorize_orders(
+            llm, [m["products"] for m in matched_orders], list(existing_categories)
+        )
+        return {
+            matched_orders[position]["order_id"]: category for position, category in categories.items()
+        }

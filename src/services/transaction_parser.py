@@ -2,14 +2,15 @@
 
 import asyncio
 import logging
-import os
 import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
+
+from src.llm import LLMClient, LLMError, get_llm_client
+from src.llm.categorize import categorize_transactions
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -27,44 +28,24 @@ class _ParsedTransactionList(BaseModel):
     transactions: List[_ParsedTransaction]
 
 
-class _ParsedCategory(BaseModel):
-    category: str
-    is_new: bool
-    reasoning: str
+_PDF_SYSTEM_PROMPT = """You are a financial document parsing expert.
+Extract all financial transactions from the bank statement text provided.
+
+Rules:
+- Only extract clear, identifiable transactions
+- Dates must be in ISO format (YYYY-MM-DD)
+- Amounts are negative for expenses/debits, positive for income/credits
+- Categories should be short and descriptive (e.g. food, transport, shopping, utilities, income)
+- Default currency to EUR if not specified
+- Reuse existing categories when appropriate"""
 
 
 class TransactionParser:
     """Service for parsing extracted data into transaction format."""
     
-    # Maximum description length for LLM categorization to prevent prompt injection
-    MAX_DESCRIPTION_LENGTH = 500
-    
     # Maximum characters per PDF chunk sent to the LLM.
     # Each chunk is already bounded by PAGES_PER_CHUNK pages; this is a safety cap.
     MAX_PDF_TEXT_LENGTH = 40000
-    
-    @staticmethod
-    def _get_openai_client() -> Optional[OpenAI]:
-        """Get or create OpenAI client.
-        
-        Note: This creates a new client instance each time rather than using a global
-        singleton pattern. This approach is used because:
-        1. The parser is typically used in batch processing contexts where a client
-           is created once per batch in parse_transactions()
-        2. It avoids global state management in a stateless service class
-        3. It allows for easier testing with dependency injection
-        
-        Returns:
-            OpenAI client instance or None if API key is not available
-        """
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return None
-        try:
-            return OpenAI(api_key=api_key)
-        except Exception as e:
-            logger.warning(f"Failed to create OpenAI client: {str(e)}")
-            return None
     
     @staticmethod
     def parse_date(date_str: Any) -> Optional[str]:
@@ -169,99 +150,22 @@ class TransactionParser:
         return "EUR"  # Default currency
     
     @staticmethod
-    def categorize_transaction_with_llm(
-        description: str,
-        amount: float,
-        existing_categories: List[str],
-        openai_client: Optional[OpenAI] = None,
-        merchant_rules: Optional[List[Dict[str, str]]] = None,
-    ) -> str:
-        """Categorize transaction using LLM based on description, amount, and existing categories.
-        
-        This method uses an LLM to intelligently assign categories to transactions.
-        The LLM will either reuse an existing category or create a new one if appropriate.
-        
-        Args:
-            description: Transaction description
-            amount: Transaction amount (negative for expenses, positive for income)
-            existing_categories: List of existing category labels to consider
-            openai_client: Optional OpenAI client instance. If not provided, creates a new one.
-            
-        Returns:
-            Category name (either existing or newly created)
-        """
-        # Check merchant rules before calling the LLM
-        if merchant_rules:
-            desc_lower = description.lower()
-            for rule in merchant_rules:
-                if rule["pattern"].lower() in desc_lower:
-                    logger.debug(f"Merchant rule matched '{rule['pattern']}' → '{rule['category']}' for '{description}'")
-                    return rule["category"]
+    def _match_merchant_rule(
+        description: str, merchant_rules: Optional[List[Dict[str, str]]]
+    ) -> Optional[str]:
+        """Category of the first merchant rule whose pattern appears in the description, if any."""
+        if not merchant_rules:
+            return None
+        desc_lower = description.lower()
+        for rule in merchant_rules:
+            if rule["pattern"].lower() in desc_lower:
+                logger.debug(f"Merchant rule matched '{rule['pattern']}' → '{rule['category']}' for '{description}'")
+                return rule["category"]
+        return None
 
-        # Get or create OpenAI client
-        if openai_client is None:
-            openai_client = TransactionParser._get_openai_client()
-            if openai_client is None:
-                logger.warning("OPENAI_API_KEY not set or client creation failed, falling back to rule-based categorization")
-                return TransactionParser._categorize_transaction_fallback(description, amount)
-
-        # Prepare the prompt for the LLM
-        transaction_type = "income" if amount > 0 else "expense"
-        
-        system_prompt = """You are a financial transaction categorization expert.
-Your job is to assign a category label to a transaction based on its description and amount.
-
-Rules:
-1. If the transaction clearly fits into one of the existing categories, use that category exactly as it appears.
-2. Only create a NEW category if the transaction doesn't fit well into any existing category.
-3. Category labels should be short (1-2 words), lowercase, and descriptive.
-4. Common categories: food, transport, shopping, utilities, rent, income, entertainment, health, education."""
-
-        existing_categories_text = "None - this is the first transaction" if not existing_categories else ", ".join(existing_categories)
-
-        sanitized_description = description.strip()[:TransactionParser.MAX_DESCRIPTION_LENGTH]
-        sanitized_description = ''.join(char for char in sanitized_description if char.isprintable() or char.isspace())
-
-        user_prompt = (
-            f"Transaction details:\n"
-            f"- Description: {sanitized_description}\n"
-            f"- Amount: {amount}\n"
-            f"- Type: {transaction_type}\n\n"
-            f"Existing categories: {existing_categories_text}\n\n"
-            f"Assign the most appropriate category for this transaction."
-        )
-
-        try:
-            completion = openai_client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format=_ParsedCategory,
-                temperature=0.3,
-            )
-
-            parsed = completion.choices[0].message.parsed
-            if parsed is None:
-                raise ValueError("Structured output returned None")
-
-            if parsed.is_new:
-                logger.info(f"LLM created new category '{parsed.category}' for '{sanitized_description}': {parsed.reasoning}")
-            else:
-                logger.debug(f"LLM assigned existing category '{parsed.category}' for '{sanitized_description}'")
-            
-            return parsed.category.lower().strip()
-
-        except Exception as e:
-            logger.warning(f"LLM categorization failed: {str(e)}, falling back to rule-based categorization")
-            return TransactionParser._categorize_transaction_fallback(description, amount)
-    
     @staticmethod
-    def _categorize_transaction_fallback(description: str, amount: float) -> str:
-        """Fallback categorization using simple rules (used when LLM is unavailable).
-        
-        This is the original hardcoded categorization logic, kept as a fallback.
+    def categorize_transaction(description: str, amount: float) -> str:
+        """Rule-based categorization, used when the LLM is unavailable or leaves a row unanswered.
         
         Args:
             description: Transaction description
@@ -299,141 +203,67 @@ Rules:
         return "other"
     
     @staticmethod
-    def categorize_transaction(description: str, amount: float) -> str:
-        """Categorize transaction based on description and amount.
-        
-        DEPRECATED: This method uses hardcoded rules. Use categorize_transaction_with_llm instead.
-        Kept for backward compatibility.
-        
-        Args:
-            description: Transaction description
-            amount: Transaction amount
-            
-        Returns:
-            Category name
-        """
-        return TransactionParser._categorize_transaction_fallback(description, amount)
-    
-    @staticmethod
-    def parse_pdf_with_llm(
-        pdf_text: str,
-        existing_categories: Optional[List[str]] = None,
-        openai_client: Optional[OpenAI] = None
-    ) -> List[Dict[str, Any]]:
-        """Parse PDF text using LLM to extract transaction data.
-        
-        Args:
-            pdf_text: Full text content from PDF
-            existing_categories: List of existing category labels
-            openai_client: Optional OpenAI client instance
-            
-        Returns:
-            List of parsed transactions
-        """
-        if existing_categories is None:
-            existing_categories = []
-        
-        # Get or create OpenAI client
-        if openai_client is None:
-            openai_client = TransactionParser._get_openai_client()
-            if openai_client is None:
-                logger.error("OPENAI_API_KEY not set or client creation failed, cannot parse PDF with LLM")
-                return []
-        
-        system_prompt = """You are a financial document parsing expert.
-Extract all financial transactions from the bank statement text provided.
-
-Rules:
-- Only extract clear, identifiable transactions
-- Dates must be in ISO format (YYYY-MM-DD)
-- Amounts are negative for expenses/debits, positive for income/credits
-- Categories should be short and descriptive (e.g. food, transport, shopping, utilities, income)
-- Default currency to EUR if not specified
-- Reuse existing categories when appropriate"""
-
-        existing_categories_text = "None - create appropriate categories" if not existing_categories else ", ".join(existing_categories)
-        truncated_text = pdf_text[: TransactionParser.MAX_PDF_TEXT_LENGTH]
-
-        user_prompt = (
-            f"Bank statement text:\n\n{truncated_text}\n\n"
-            f"Existing categories: {existing_categories_text}"
-        )
-
-        try:
-            completion = openai_client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format=_ParsedTransactionList,
-                temperature=0.1,
-            )
-
-            parsed = completion.choices[0].message.parsed
-            if parsed is None:
-                raise ValueError("Structured output returned None")
-
-            valid_transactions = [t.model_dump() for t in parsed.transactions]
-            logger.info(f"LLM extracted {len(valid_transactions)} transactions from PDF")
-            return valid_transactions
-
-        except Exception as e:
-            logger.error(f"LLM-based PDF parsing failed: {str(e)}")
-            return []
-    
-    @staticmethod
     async def _parse_pdf_chunk_async(
         chunk: Dict[str, Any],
         existing_categories: List[str],
-        async_client: AsyncOpenAI,
+        llm: LLMClient,
     ) -> List[Dict[str, Any]]:
-        """Parse a single PDF chunk via AsyncOpenAI (used by parse_transactions_async)."""
+        """Parse a single PDF chunk with the configured LLM (used by parse_transactions_async)."""
         label = chunk.get("pages", f"chunk {chunk.get('chunk_index', '?')}")
-        pdf_text = chunk["pdf_text"]
-        truncated = pdf_text[: TransactionParser.MAX_PDF_TEXT_LENGTH]
+        truncated = chunk["pdf_text"][: TransactionParser.MAX_PDF_TEXT_LENGTH]
 
         existing_categories_text = (
             "None - create appropriate categories"
             if not existing_categories
             else ", ".join(existing_categories)
         )
-
-        system_prompt = """You are a financial document parsing expert.
-Extract all financial transactions from the bank statement text provided.
-
-Rules:
-- Only extract clear, identifiable transactions
-- Dates must be in ISO format (YYYY-MM-DD)
-- Amounts are negative for expenses/debits, positive for income/credits
-- Categories should be short and descriptive (e.g. food, transport, shopping, utilities, income)
-- Default currency to EUR if not specified
-- Reuse existing categories when appropriate"""
-
         user_prompt = (
             f"Bank statement text:\n\n{truncated}\n\n"
             f"Existing categories: {existing_categories_text}"
         )
 
         try:
-            completion = await async_client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format=_ParsedTransactionList,
-                temperature=0.1,
-            )
-            parsed = completion.choices[0].message.parsed
-            if parsed is None:
-                raise ValueError("Structured output returned None")
+            parsed = await llm.structured(_PDF_SYSTEM_PROMPT, user_prompt, _ParsedTransactionList, temperature=0.1)
             valid = [t.model_dump() for t in parsed.transactions]
             logger.info(f"Chunk {label}: {len(valid)} transactions extracted")
             return valid
-        except Exception as e:
+        except LLMError as e:
             logger.warning(f"Skipped chunk {label}: {e}")
             return []
+
+    @staticmethod
+    async def _parse_rows_async(
+        rows: List[Dict[str, Any]],
+        existing_categories: List[str],
+        merchant_rules: Optional[List[Dict[str, str]]],
+        llm: LLMClient,
+    ) -> List[Dict[str, Any]]:
+        """CSV/Excel rows: parse without the LLM, then categorize the rest in batches."""
+        transactions: List[Dict[str, Any]] = []
+        for i, row in enumerate(rows):
+            try:
+                transaction = TransactionParser.parse_row(row, merchant_rules=merchant_rules)
+            except Exception as e:
+                logger.warning(f"Error parsing row {i}: {str(e)}")
+                continue
+            if transaction:
+                transactions.append(transaction)
+            else:
+                logger.debug(f"Skipped row {i}: Could not parse")
+
+        pending = [i for i, t in enumerate(transactions) if t["category"] is None]
+        if pending:
+            known = list(existing_categories) + [t["category"] for t in transactions if t["category"]]
+            categories = await categorize_transactions(
+                llm, [transactions[i] for i in pending], list(dict.fromkeys(known))
+            )
+            for position, i in enumerate(pending):
+                transactions[i]["category"] = categories.get(position) or TransactionParser.categorize_transaction(
+                    transactions[i]["description"], transactions[i]["amount"]
+                )
+
+        logger.info(f"Parsed {len(transactions)} transactions from {len(rows)} rows")
+        return transactions
 
     @staticmethod
     async def parse_transactions_async(
@@ -441,35 +271,27 @@ Rules:
         existing_categories: Optional[List[str]] = None,
         merchant_rules: Optional[List[Dict[str, str]]] = None,
         on_chunk_done: Optional[Any] = None,
+        llm: Optional[LLMClient] = None,
     ) -> List[Dict[str, Any]]:
-        """Async version of parse_transactions for PDF chunks.
+        """Parse extracted file rows into transactions using the configured LLM provider.
 
-        All chunks are sent to OpenAI in parallel via asyncio.as_completed — total time
-        equals the slowest single call instead of the sum of all calls.
-        Falls back to the sync path for CSV/Excel rows.
-        on_chunk_done(completed, total) is called each time a chunk finishes.
+        PDF chunks are sent to the LLM in parallel via asyncio.as_completed (the provider caps
+        its own concurrency). CSV/Excel rows are parsed locally and categorized in batches.
+        on_chunk_done(completed, total) is called each time a PDF chunk finishes.
         """
         if existing_categories is None:
             existing_categories = []
+        llm = llm or get_llm_client()
 
         if not (rows and all("pdf_text" in row for row in rows)):
-            # CSV/Excel: run the sync path in a thread to avoid blocking the event loop
-            return await asyncio.to_thread(
-                TransactionParser.parse_transactions, rows, existing_categories, merchant_rules
-            )
+            return await TransactionParser._parse_rows_async(rows, existing_categories, merchant_rules, llm)
 
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.error("OPENAI_API_KEY not set — cannot parse PDF")
-            return []
-
-        async_client = AsyncOpenAI(api_key=api_key)
         total = len(rows)
-        logger.info(f"Parsing {total} PDF chunk(s) in parallel")
+        logger.info(f"Parsing {total} PDF chunk(s) in parallel with {llm.name}")
 
         tasks = [
             asyncio.create_task(
-                TransactionParser._parse_pdf_chunk_async(chunk, list(existing_categories), async_client)
+                TransactionParser._parse_pdf_chunk_async(chunk, list(existing_categories), llm)
             )
             for chunk in rows
         ]
@@ -489,27 +311,22 @@ Rules:
     @staticmethod
     def parse_row(
         row: Dict[str, Any],
-        existing_categories: Optional[List[str]] = None,
-        openai_client: Optional[OpenAI] = None,
         merchant_rules: Optional[List[Dict[str, str]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Parse a single row into transaction format.
-        
+
+        The category is the file's own category column, else the first matching merchant rule,
+        else ``None``: the caller categorizes those rows in batch with the LLM.
+
         Args:
             row: Raw data row
-            existing_categories: List of existing category labels (for LLM categorization)
-            openai_client: Optional OpenAI client instance
+            merchant_rules: Optional merchant pattern → category rules
             
         Returns:
             Transaction dictionary or None if parsing fails
         """
-        if existing_categories is None:
-            existing_categories = []
-            
-        # Handle PDF text - this should now be handled by parse_pdf_with_llm
+        # PDF chunks are parsed by the LLM, not row by row
         if "pdf_text" in row:
-            # This is now handled by parse_pdf_with_llm instead
-            logger.debug("PDF text detected, should be parsed with parse_pdf_with_llm")
             return None
         
         # Handle structured data (CSV/Excel)
@@ -572,9 +389,7 @@ Rules:
                     break
         
         if not category:
-            category = TransactionParser.categorize_transaction_with_llm(
-                description, amount, existing_categories, openai_client, merchant_rules
-            )
+            category = TransactionParser._match_merchant_rule(description, merchant_rules)
         
         return {
             "date": date,
@@ -583,116 +398,3 @@ Rules:
             "currency": currency,
             "category": category
         }
-    
-    @staticmethod
-    def parse_transactions(
-        rows: List[Dict[str, Any]],
-        existing_categories: Optional[List[str]] = None,
-        merchant_rules: Optional[List[Dict[str, str]]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Parse multiple rows into transactions.
-        
-        Args:
-            rows: List of raw data rows
-            existing_categories: List of existing category labels (for LLM categorization)
-            
-        Returns:
-            List of parsed transactions
-        """
-        if existing_categories is None:
-            existing_categories = []
-        
-        # Detect PDF chunks: all rows have a "pdf_text" key
-        if rows and all("pdf_text" in row for row in rows):
-            total_chunks = len(rows)
-            logger.info(f"Detected {total_chunks} PDF chunk(s) — processing with LLM")
-            openai_client = TransactionParser._get_openai_client()
-            all_transactions: List[Dict[str, Any]] = []
-
-            for chunk in rows:
-                label = chunk.get("pages", f"chunk {chunk.get('chunk_index', '?')}")
-                logger.info(f"  Processing pages {label} ({total_chunks} chunks total)")
-                try:
-                    chunk_txns = TransactionParser.parse_pdf_with_llm(
-                        chunk["pdf_text"],
-                        existing_categories=existing_categories,
-                        openai_client=openai_client,
-                    )
-                    all_transactions.extend(chunk_txns)
-                    # Share discovered categories with subsequent chunks so the LLM
-                    # reuses existing labels rather than inventing new ones
-                    for txn in chunk_txns:
-                        cat = txn.get("category")
-                        if cat and cat not in existing_categories:
-                            existing_categories.append(cat)
-                except Exception as e:
-                    logger.warning(f"  Skipped pages {label}: {e}")
-
-            logger.info(f"PDF parsing complete: {len(all_transactions)} transactions extracted")
-            return all_transactions
-        
-        transactions = []
-        
-        # Create a single OpenAI client to reuse across all transactions
-        openai_client = None
-        openai_client = TransactionParser._get_openai_client()
-        
-        for i, row in enumerate(rows):
-            try:
-                transaction = TransactionParser.parse_row(
-                    row,
-                    existing_categories=existing_categories,
-                    openai_client=openai_client,
-                    merchant_rules=merchant_rules,
-                )
-                if transaction:
-                    transactions.append(transaction)
-                    # Add new category to existing_categories for next iterations
-                    if transaction["category"] not in existing_categories:
-                        existing_categories.append(transaction["category"])
-                else:
-                    logger.debug(f"Skipped row {i}: Could not parse")
-            except Exception as e:
-                logger.warning(f"Error parsing row {i}: {str(e)}")
-        
-        logger.info(f"Parsed {len(transactions)} transactions from {len(rows)} rows")
-        
-        return transactions
-    
-    @staticmethod
-    def remove_duplicates(
-        transactions: List[Dict[str, Any]], 
-        existing_transactions: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Remove duplicate transactions.
-        
-        Args:
-            transactions: New transactions to check
-            existing_transactions: Existing transactions in the system
-            
-        Returns:
-            List of unique transactions
-        """
-        unique_transactions = []
-        
-        for transaction in transactions:
-            is_duplicate = False
-            
-            for existing in existing_transactions:
-                # Check if transaction matches on date, amount, and description
-                if (transaction["date"] == existing.get("date") and
-                    abs(transaction["amount"] - existing.get("amount", 0)) < 0.01 and
-                    transaction["description"] == existing.get("description")):
-                    is_duplicate = True
-                    logger.debug(f"Skipped duplicate transaction: {transaction}")
-                    break
-            
-            if not is_duplicate:
-                unique_transactions.append(transaction)
-        
-        logger.info(
-            f"Removed {len(transactions) - len(unique_transactions)} duplicates, "
-            f"{len(unique_transactions)} unique transactions remaining"
-        )
-        
-        return unique_transactions

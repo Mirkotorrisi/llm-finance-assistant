@@ -121,10 +121,16 @@ class TestMatchOrdersToTransactions:
 
 
 class TestCategorizeOrdersWithLlm:
-    def test_returns_empty_without_api_key(self, monkeypatch):
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    def test_returns_empty_when_provider_is_unavailable(self):
+        from src.llm import LLMError
+
+        class Unavailable:
+            name = "stub"
+
+            async def structured(self, *a, **k):
+                raise LLMError("OPENAI_API_KEY is not set")
 
         matched = [{"order_id": "O1", "products": ["Chicco Passeggino"], "transaction": {"id": 1}}]
-        result = asyncio.run(AmazonOrderParser.categorize_orders_with_llm(matched, ["shopping"]))
+        result = asyncio.run(AmazonOrderParser.categorize_orders_with_llm(matched, ["shopping"], llm=Unavailable()))
 
         assert result == {}

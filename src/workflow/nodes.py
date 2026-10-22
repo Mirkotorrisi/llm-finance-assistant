@@ -2,14 +2,13 @@ import datetime
 import json
 import os
 from typing import Dict
-import speech_recognition as sr
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 from src.models import Action, FinancialParameters, LLMNLUResponse
 from src.workflow.state import FinanceState
 
-from src.workflow.mcp_client import get_mcp_client 
+from src.api_client import get_api_client 
 
 load_dotenv()
 
@@ -32,11 +31,11 @@ ONBOARDING_TOPICS = """1. Cosa vuole categorizzare (che tipo di spese/entrate vu
 
 async def context_node(state: FinanceState) -> Dict:
     """Context Node: loads the user's onboarding preferences and decides whether onboarding is needed."""
-    mcp_client = await get_mcp_client()
+    api_client = await get_api_client()
     user_id = state.get("user_id") or "anonymous"
 
     try:
-        user_context = await mcp_client.call_tool("get_user_preferences", {"user_id": user_id})
+        user_context = await api_client.call_tool("get_user_preferences", {"user_id": user_id})
     except Exception as e:
         print(f"--- Context Error: {e} ---")
         user_context = {
@@ -61,22 +60,8 @@ def route_after_asr(state: FinanceState) -> str:
 
 
 async def asr_node(state: FinanceState) -> Dict:
-    """Automatic Speech Recognition Node: Recognize speech if input is audio, otherwise pass text through."""
-    user_input = state["input"]
-    transcription = ""
-    
-    if user_input.is_audio:
-        recognizer = sr.Recognizer()
-        try:
-            with sr.AudioFile(user_input.text) as source:
-                audio = recognizer.record(source)
-            transcription = recognizer.recognize_google(audio)
-        except Exception as e:
-            print(f"--- ASR Error: {e} ---")
-    else:
-        transcription = user_input.text
-        
-    return {"transcription": transcription}
+    """Input node: the user's text becomes the working ``transcription`` (there is no audio input)."""
+    return {"transcription": state["input"].text}
 
 
 async def nlu_node(state: FinanceState) -> Dict:
@@ -193,9 +178,9 @@ Return ONLY a JSON object: {{"updated_fields": {{...}}, "is_complete": <bool>, "
     draft = {**known_context, **updated_fields}
 
     if updated_fields:
-        mcp_client = await get_mcp_client()
+        api_client = await get_api_client()
         try:
-            await mcp_client.call_tool(
+            await api_client.call_tool(
                 "update_user_preferences",
                 {"user_id": state.get("user_id") or "anonymous", **updated_fields},
             )
@@ -215,7 +200,7 @@ Return ONLY a JSON object: {{"updated_fields": {{...}}, "is_complete": <bool>, "
 
 async def query_node(state: FinanceState) -> Dict:
     """Query Node: Calls the appropriate tool on the MCP server based on the extracted action and parameters."""
-    mcp_client = await get_mcp_client()
+    api_client = await get_api_client()
     action = state["action"]
     params = state["parameters"].model_dump(exclude_none=True)
     
@@ -232,7 +217,7 @@ async def query_node(state: FinanceState) -> Dict:
         if not pattern or not new_category:
             return {"query_results": {"error": "pattern and new_category are required for recategorize."}}
         try:
-            results = await mcp_client.call_tool(
+            results = await api_client.call_tool(
                 "recategorize_transactions",
                 {"pattern": pattern, "category": new_category},
             )
@@ -241,20 +226,20 @@ async def query_node(state: FinanceState) -> Dict:
             return {"query_results": {"error": str(e)}}
 
     if action == Action.SMART_RECATEGORIZE:
-        return await _smart_recategorize(state, mcp_client)
+        return await _smart_recategorize(state, api_client)
 
     tool_name = mapping.get(action)
     if not tool_name:
         return {"query_results": {"error": "Unknown action, cannot map to tool."}}
 
     try:
-        results = await mcp_client.call_tool(tool_name, params)
+        results = await api_client.call_tool(tool_name, params)
         return {"query_results": results}
     except Exception as e:
         return {"query_results": {"error": str(e)}}
 
 
-async def _smart_recategorize(state: FinanceState, mcp_client) -> Dict:
+async def _smart_recategorize(state: FinanceState, api_client) -> Dict:
     """Fetch transactions by category and use LLM to classify each into sub-categories."""
     category = state["parameters"].category
     new_categories = state["parameters"].new_categories
@@ -263,7 +248,7 @@ async def _smart_recategorize(state: FinanceState, mcp_client) -> Dict:
         return {"query_results": {"error": "category and new_categories are required for smart_recategorize."}}
 
     try:
-        transactions = await mcp_client.call_tool("list_transactions", {"category": category})
+        transactions = await api_client.call_tool("list_transactions", {"category": category})
     except Exception as e:
         return {"query_results": {"error": f"Failed to fetch transactions: {e}"}}
 
@@ -455,8 +440,8 @@ async def generator_node(state: FinanceState) -> Dict:
         if action == Action.BALANCE:
             current_balance = state["query_results"]
         else:
-            mcp_client = await get_mcp_client()
-            current_balance = await mcp_client.call_tool("get_balance", {})
+            api_client = await get_api_client()
+            current_balance = await api_client.call_tool("get_balance", {})
 
         user_context = state.get("user_context") or {}
         current_context = {

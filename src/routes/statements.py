@@ -1,15 +1,17 @@
 """Statement upload and ingestion endpoints."""
 
 import asyncio
+import hashlib
 import io
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+import httpx
+from fastapi import APIRouter, BackgroundTasks, File, Form, Header, HTTPException, UploadFile
 
+from src.api_client import get_api_client, request_context
 from src.services import FileProcessor, FileValidationError, TransactionParser
-from src.workflow.mcp_client import get_mcp_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/statements", tags=["statements"])
@@ -18,7 +20,26 @@ router = APIRouter(prefix="/statements", tags=["statements"])
 _jobs: Dict[str, Dict[str, Any]] = {}
 
 
-async def _process_statement(job_id: str, filename: str, file_content: bytes) -> None:
+async def _process_statement(
+    job_id: str,
+    filename: str,
+    file_content: bytes,
+    account_id: int,
+    workspace_id: Optional[int] = None,
+    user_id: Optional[str] = None,
+) -> None:
+    with request_context(workspace_id, user_id):
+        await _run_statement_job(job_id, filename, file_content, account_id)
+
+
+def _api_error_detail(error: httpx.HTTPStatusError) -> str:
+    try:
+        return str(error.response.json().get("detail", error.response.text))
+    except Exception:  # noqa: BLE001
+        return error.response.text
+
+
+async def _run_statement_job(job_id: str, filename: str, file_content: bytes, account_id: int) -> None:
     try:
         _jobs[job_id]["step"] = "extracting"
 
@@ -33,11 +54,11 @@ async def _process_statement(job_id: str, filename: str, file_content: bytes) ->
             _jobs[job_id] = {"status": "error", "error": str(e)}
             return
 
-        mcp_client = await get_mcp_client()
+        api_client = await get_api_client()
 
         existing_categories, merchant_rules = await asyncio.gather(
-            mcp_client.call_tool("get_distinct_categories", {}),
-            mcp_client.call_tool("get_merchant_rules", {}),
+            api_client.call_tool("get_distinct_categories", {}),
+            api_client.call_tool("get_merchant_rules", {}),
         )
 
         is_pdf = extracted_data and all("pdf_text" in r for r in extracted_data)
@@ -74,31 +95,42 @@ async def _process_statement(job_id: str, filename: str, file_content: bytes) ->
 
         _jobs[job_id]["step"] = "saving"
 
-        raw_transactions_data = await mcp_client.call_tool("list_transactions", {})
-        unique_transactions = TransactionParser.remove_duplicates(transactions, raw_transactions_data)
-
-        added_transactions = await mcp_client.call_tool(
-            "add_transactions_bulk",
-            {"transactions": unique_transactions},
+        # The API does the dedup (against what is already stored for this account), keeps an undoable batch and
+        # pairs transfers between the user's own accounts.
+        imported = await api_client.call_tool(
+            "import_statement",
+            {
+                "account_id": account_id,
+                "transactions": transactions,
+                "filename": filename,
+                "file_hash": hashlib.sha256(file_content).hexdigest(),
+            },
         )
 
         logger.info(
-            f"Job {job_id}: {len(added_transactions)} transactions added, "
-            f"{len(transactions) - len(unique_transactions)} duplicates skipped"
+            f"Job {job_id}: {imported['added_count']} transactions added, "
+            f"{imported['skipped_count']} already present, {imported['transfers_detected']} transfers detected"
         )
 
         _jobs[job_id] = {
             "status": "complete",
             "result": {
                 "success": True,
-                "message": f"Successfully processed {len(added_transactions)} transactions",
-                "transactions_processed": len(transactions),
-                "transactions_added": len(added_transactions),
-                "transactions_skipped": len(transactions) - len(unique_transactions),
-                "transactions": added_transactions,
+                "message": f"Successfully processed {imported['added_count']} transactions",
+                "transactions_processed": imported["row_count"],
+                "transactions_added": imported["added_count"],
+                "transactions_skipped": imported["skipped_count"],
+                "transactions": imported["transactions"],
+                "batch_id": imported["batch_id"],
+                "transfers_detected": imported["transfers_detected"],
+                "duplicate_file": imported["duplicate_file"],
+                "invalid_rows": imported["invalid_rows"],
             },
         }
 
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Job {job_id}: API rejected the import: {e}")
+        _jobs[job_id] = {"status": "error", "error": _api_error_detail(e)}
     except Exception as e:
         logger.error(f"Unexpected error processing job {job_id}: {str(e)}", exc_info=True)
         _jobs[job_id] = {"status": "error", "error": f"Error processing file: {str(e)}"}
@@ -108,6 +140,9 @@ async def _process_statement(job_id: str, filename: str, file_content: bytes) ->
 async def upload_statement(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    account_id: int = Form(..., description="The bank account or card this statement belongs to."),
+    x_workspace_id: Optional[int] = Header(default=None),
+    x_user_id: Optional[str] = Header(default=None),
 ) -> Dict[str, str]:
     """Read the file and start processing in background. Returns a job_id for polling."""
     try:
@@ -123,7 +158,9 @@ async def upload_statement(
         "completed_chunks": 0,
         "total_chunks": 0,
     }
-    background_tasks.add_task(_process_statement, job_id, file.filename, file_content)
+    background_tasks.add_task(
+        _process_statement, job_id, file.filename, file_content, account_id, x_workspace_id, x_user_id
+    )
     return {"job_id": job_id}
 
 

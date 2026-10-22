@@ -10,13 +10,14 @@ dependencies = [
     "langgraph",
     "openai",
     "python-dotenv",
-    "mcp",
-    "sqlalchemy",
-    "psycopg2-binary",
     "pandas",
-    "speechrecognition",
     "pypdf2",
     "openpyxl",
     "python-multipart",
-    "alembic",
+    "httpx>=0.28.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
 ]

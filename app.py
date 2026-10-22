@@ -7,13 +7,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+from src.agent import shutdown_backend
+from src.routes.agent_chat import router as agent_chat_router
 from src.routes.amazon import router as amazon_router
-from src.routes.chat import router as chat_router
 from src.routes.core import router as core_router
 from src.routes.search import router as search_router
 from src.routes.statements import router as statements_router
 
-from src.workflow.mcp_client import get_mcp_client, reset_mcp_client
+from src.api_client import get_api_client, reset_api_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,9 +23,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Finance agent starting up — API client initialised lazily on first request")
     yield
-    client = await get_mcp_client()
+    await shutdown_backend()
+    client = await get_api_client()
     await client.disconnect()
-    reset_mcp_client()
+    reset_api_client()
     logger.info("Finance agent shut down cleanly")
 
 app = FastAPI(
@@ -43,7 +45,7 @@ app.add_middleware(
 )
 
 app.include_router(core_router)
-app.include_router(chat_router)
+app.include_router(agent_chat_router)
 app.include_router(search_router)
 app.include_router(statements_router)
 app.include_router(amazon_router)

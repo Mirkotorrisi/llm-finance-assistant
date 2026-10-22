@@ -4,11 +4,13 @@ import logging
 from typing import Any, Dict
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from typing import Optional
+
+from fastapi import APIRouter, BackgroundTasks, File, Header, HTTPException, UploadFile
 
 from src.services.amazon_order_parser import AmazonCsvError, AmazonOrderParser
 from src.services.file_processor import FileProcessor, FileValidationError
-from src.workflow.mcp_client import get_mcp_client
+from src.api_client import get_api_client, request_context
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/amazon", tags=["amazon"])
@@ -17,7 +19,14 @@ router = APIRouter(prefix="/amazon", tags=["amazon"])
 _jobs: Dict[str, Dict[str, Any]] = {}
 
 
-async def _process_amazon_orders(job_id: str, file_content: bytes) -> None:
+async def _process_amazon_orders(
+    job_id: str, file_content: bytes, workspace_id: Optional[int] = None, user_id: Optional[str] = None
+) -> None:
+    with request_context(workspace_id, user_id):
+        await _run_amazon_job(job_id, file_content)
+
+
+async def _run_amazon_job(job_id: str, file_content: bytes) -> None:
     try:
         _jobs[job_id]["step"] = "parsing_csv"
         try:
@@ -41,10 +50,10 @@ async def _process_amazon_orders(job_id: str, file_content: bytes) -> None:
             }
             return
 
-        mcp_client = await get_mcp_client()
+        api_client = await get_api_client()
         _jobs[job_id]["step"] = "matching"
 
-        all_transactions = await mcp_client.call_tool("list_transactions", {})
+        all_transactions = await api_client.call_tool("list_transactions", {})
         matched, unmatched = AmazonOrderParser.match_orders_to_transactions(orders, all_transactions)
 
         if not matched:
@@ -63,7 +72,7 @@ async def _process_amazon_orders(job_id: str, file_content: bytes) -> None:
             return
 
         _jobs[job_id]["step"] = "categorizing"
-        existing_categories = await mcp_client.call_tool("get_distinct_categories", {})
+        existing_categories = await api_client.call_tool("get_distinct_categories", {})
         categories_by_order = await AmazonOrderParser.categorize_orders_with_llm(
             matched, list(existing_categories)
         )
@@ -88,7 +97,7 @@ async def _process_amazon_orders(job_id: str, file_content: bytes) -> None:
         _jobs[job_id]["step"] = "saving"
         updated = []
         if updates:
-            updated = await mcp_client.call_tool("update_transactions_bulk_category", {"updates": updates})
+            updated = await api_client.call_tool("update_transactions_bulk_category", {"updates": updates})
 
         _jobs[job_id] = {
             "status": "complete",
@@ -112,6 +121,8 @@ async def _process_amazon_orders(job_id: str, file_content: bytes) -> None:
 async def upload_amazon_orders(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    x_workspace_id: Optional[int] = Header(default=None),
+    x_user_id: Optional[str] = Header(default=None),
 ) -> Dict[str, str]:
     """Upload an Amazon 'Order History' CSV export.
 
@@ -135,7 +146,7 @@ async def upload_amazon_orders(
 
     job_id = str(uuid4())
     _jobs[job_id] = {"status": "processing", "step": "queued"}
-    background_tasks.add_task(_process_amazon_orders, job_id, file_content)
+    background_tasks.add_task(_process_amazon_orders, job_id, file_content, x_workspace_id, x_user_id)
     return {"job_id": job_id}
 
 

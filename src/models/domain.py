@@ -33,7 +33,6 @@ class FinancialParameters(BaseModel):
 class UserInput(BaseModel):
     """User input model."""
     text: str
-    is_audio: bool = False
 
 
 class LLMNLUResponse(BaseModel):

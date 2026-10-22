@@ -1,11 +1,11 @@
-"""Transaction search endpoint — uses OpenAI web search to identify merchants."""
+"""Transaction search endpoint — uses the configured LLM provider's web search to identify merchants."""
 
 import logging
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from src.workflow.nodes import get_openai_client
+from src.llm import LLMError, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,6 @@ async def search_transaction(request: TransactionSearchRequest):
     if not request.description.strip():
         raise HTTPException(status_code=400, detail="description cannot be empty")
 
-    client = get_openai_client()
     prompt = (
         f"I found this entry on my bank statement: \"{request.description}\". "
         "Search the web and tell me in 2-3 sentences what this is: "
@@ -36,12 +35,7 @@ async def search_transaction(request: TransactionSearchRequest):
     )
 
     try:
-        response = await client.responses.create(
-            model="gpt-4o-mini",
-            tools=[{"type": "web_search_preview"}],
-            input=prompt,
-        )
-        return {"result": response.output_text}
-    except Exception as e:
-        logger.error("search-transaction error: %s", e, exc_info=True)
+        return {"result": await get_llm_client().web_search(prompt)}
+    except LLMError as e:
+        logger.error("search-transaction error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

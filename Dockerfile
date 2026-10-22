@@ -13,7 +13,7 @@ ENV UV_COMPILE_BYTECODE=1
 # Copy from the cache instead of linking since it's a container
 ENV UV_LINK_MODE=copy
 
-# Install system dependencies (necessary for packages like speechrecognition)
+# Build tools for dependencies that compile native extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
