@@ -3,10 +3,12 @@
 import csv
 import io
 import logging
-from typing import List, Dict, Any, BinaryIO
+from html.parser import HTMLParser
+from typing import List, Dict, Any, BinaryIO, Optional
 from PyPDF2 import PdfReader
-import openpyxl
 import pandas as pd
+
+from src.services.columns import header_kinds
 
 logger = logging.getLogger(__name__)
 
@@ -97,57 +99,152 @@ class FileProcessor:
             logger.error(f"Error extracting PDF content: {str(e)}")
             raise FileValidationError(f"Failed to extract PDF content: {str(e)}")
     
+    # ------------------------------------------------------------------ spreadsheets and text tables
+
+    # Banks often name a file ".xls" or ".csv" whatever it really is (HTML, tab-separated text, the old binary Excel
+    # format, a real .xlsx). The format is therefore read from the content, never from the extension.
+    @staticmethod
+    def sniff_format(raw: bytes) -> str:
+        """'pdf' | 'xlsx' | 'xls' | 'html' | 'text', from the first bytes."""
+        if raw[:5] == b"%PDF-":
+            return "pdf"
+        if raw[:2] == b"PK":
+            return "xlsx"  # a zip container: .xlsx
+        if raw[:4] == b"\xd0\xcf\x11\xe0":
+            return "xls"  # OLE2 container: the old binary Excel format
+        head = raw[:4096].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+        if head.startswith((b"<!doctype html", b"<html", b"<table", b"<?xml")) or b"<table" in head:
+            return "html"
+        return "text"
+
+    @staticmethod
+    def _decode(raw: bytes) -> str:
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            return raw.decode("utf-16")
+        try:
+            return raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return raw.decode("cp1252", errors="replace")  # Windows exports by Italian banks
+
+    @staticmethod
+    def _text_grid(raw: bytes) -> List[List[Any]]:
+        text = FileProcessor._decode(raw)
+        lines = [l for l in text.splitlines() if l.strip()]
+        sample = lines[:30]
+        delimiter = max((";", "\t", ",", "|"), key=lambda d: sum(l.count(d) for l in sample))
+        return [[c.strip() for c in row] for row in csv.reader(io.StringIO("\n".join(lines)), delimiter=delimiter)]
+
+    @staticmethod
+    def _html_grid(raw: bytes) -> List[List[Any]]:
+        class Tables(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.tables: List[List[List[str]]] = []
+                self._depth = 0
+                self._cell: Optional[List[str]] = None
+                self._row: Optional[List[str]] = None
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "table":
+                    self._depth += 1
+                    self.tables.append([])
+                elif tag == "tr" and self.tables:
+                    self._row = []
+                elif tag in ("td", "th") and self._row is not None:
+                    self._cell = []
+
+            def handle_endtag(self, tag):
+                if tag in ("td", "th") and self._cell is not None and self._row is not None:
+                    self._row.append(" ".join("".join(self._cell).split()))
+                    self._cell = None
+                elif tag == "tr" and self._row is not None and self.tables:
+                    self.tables[-1].append(self._row)
+                    self._row = None
+                elif tag == "table":
+                    self._depth -= 1
+
+            def handle_data(self, data):
+                if self._cell is not None:
+                    self._cell.append(data)
+
+        parser = Tables()
+        parser.feed(FileProcessor._decode(raw))
+        return max(parser.tables, key=len) if parser.tables else []
+
+    @staticmethod
+    def _excel_grid(raw: bytes, kind: str) -> List[List[Any]]:
+        engine = "openpyxl" if kind == "xlsx" else "xlrd"
+        df = pd.read_excel(io.BytesIO(raw), header=None, engine=engine, dtype=object)
+        df = df.astype(object).where(df.notna(), None)
+        return df.values.tolist()
+
+    @staticmethod
+    def find_header_row(grid: List[List[Any]], scan: int = 50) -> int:
+        """Index of the heading row of the transactions table.
+
+        Statements start with rows about the account (holder, IBAN, period, balance) before the table. The heading row
+        is the first one with at least two kinds of heading (date, description, amount). Falls back to the first
+        non-empty row, which is what a plain CSV has.
+        """
+        for i, row in enumerate(grid[:scan]):
+            kinds = set()
+            for cell in row:
+                if cell is not None:
+                    kinds |= header_kinds(cell)
+            if len(kinds) >= 2:
+                return i
+        return next((i for i, row in enumerate(grid) if any(c not in (None, "") for c in row)), 0)
+
+    @staticmethod
+    def _records(grid: List[List[Any]]) -> List[Dict[str, Any]]:
+        if not grid:
+            return []
+        start = FileProcessor.find_header_row(grid)
+        names: List[str] = []
+        for j, cell in enumerate(grid[start]):
+            name = str(cell).strip() if cell not in (None, "") else f"col{j + 1}"
+            while name in names:  # duplicate headings get a suffix
+                name += "_2"
+            names.append(name)
+        records = []
+        for row in grid[start + 1:]:
+            if all(c in (None, "") for c in row):
+                continue
+            records.append({names[j]: (row[j] if j < len(row) and row[j] != "" else None) for j in range(len(names))})
+        return records
+
+    @staticmethod
+    def extract_tabular(raw: bytes) -> List[Dict[str, Any]]:
+        """Rows of a statement table from any spreadsheet-like content, as dicts keyed by the heading row."""
+        kind = FileProcessor.sniff_format(raw)
+        try:
+            if kind in ("xlsx", "xls"):
+                grid = FileProcessor._excel_grid(raw, kind)
+            elif kind == "html":
+                grid = FileProcessor._html_grid(raw)
+            elif kind == "text":
+                grid = FileProcessor._text_grid(raw)
+            else:
+                raise FileValidationError("This looks like a PDF but has a spreadsheet extension. Rename it to .pdf.")
+            data = FileProcessor._records(grid)
+        except FileValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error reading {kind} content: {str(e)}")
+            raise FileValidationError(f"Failed to read the file as a {kind} table: {str(e)}")
+        logger.info(f"Extracted {len(data)} rows from a {kind} file")
+        return data
+
     @staticmethod
     def extract_from_excel(file_content: BinaryIO) -> List[Dict[str, Any]]:
-        """Extract rows and columns from Excel file.
-        
-        Args:
-            file_content: Binary content of the Excel file
-            
-        Returns:
-            List of rows as dictionaries
-        """
-        try:
-            # Read Excel file using pandas
-            df = pd.read_excel(file_content, engine='openpyxl')
-            
-            # Convert to list of dictionaries
-            data = df.to_dict('records')
-            
-            logger.info(f"Extracted {len(data)} rows from Excel file")
-            
-            return data
-            
-        except Exception as e:
-            logger.error(f"Error extracting Excel content: {str(e)}")
-            raise FileValidationError(f"Failed to extract Excel content: {str(e)}")
-    
+        """Extract rows from an Excel-like file (.xls, .xlsx, or an HTML/text export named like one)."""
+        return FileProcessor.extract_tabular(file_content.read())
+
     @staticmethod
     def extract_from_csv(file_content: BinaryIO) -> List[Dict[str, Any]]:
-        """Extract rows from CSV file.
-        
-        Args:
-            file_content: Binary content of the CSV file
-            
-        Returns:
-            List of rows as dictionaries
-        """
-        try:
-            # Decode binary content to text
-            text_content = file_content.read().decode('utf-8')
-            
-            # Read CSV using csv.DictReader
-            csv_reader = csv.DictReader(io.StringIO(text_content))
-            data = list(csv_reader)
-            
-            logger.info(f"Extracted {len(data)} rows from CSV file")
-            
-            return data
-            
-        except Exception as e:
-            logger.error(f"Error extracting CSV content: {str(e)}")
-            raise FileValidationError(f"Failed to extract CSV content: {str(e)}")
-    
+        """Extract rows from a CSV-like file (any delimiter among ; , tab |, UTF-8 or Windows encoding)."""
+        return FileProcessor.extract_tabular(file_content.read())
+
     @staticmethod
     def process_file(filename: str, file_content: BinaryIO, file_size: int) -> List[Dict[str, Any]]:
         """Process a file and extract data.
@@ -171,9 +268,7 @@ class FileProcessor:
         
         if filename_lower.endswith('.pdf'):
             return FileProcessor.extract_from_pdf(file_content)
-        elif filename_lower.endswith(('.xls', '.xlsx')):
-            return FileProcessor.extract_from_excel(file_content)
-        elif filename_lower.endswith('.csv'):
-            return FileProcessor.extract_from_csv(file_content)
+        elif filename_lower.endswith(('.xls', '.xlsx', '.csv')):
+            return FileProcessor.extract_tabular(file_content.read())
         else:
             raise FileValidationError(f"Unsupported file format: {filename}")

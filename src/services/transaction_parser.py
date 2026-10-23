@@ -10,6 +10,9 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from src.llm import LLMClient, LLMError, get_llm_client
+from src.services.columns import (
+    AMOUNT_COLUMNS, CATEGORY_COLUMNS, CREDIT_COLUMNS, CURRENCY_COLUMNS, DATE_COLUMNS, DEBIT_COLUMNS, DESCRIPTION_COLUMNS,
+)
 from src.llm.categorize import categorize_transactions
 
 load_dotenv()
@@ -399,17 +402,9 @@ class TransactionParser:
         if "pdf_text" in row:
             return None
         
-        # Handle structured data (CSV/Excel)
-        # Try to find date, description, and amount fields with various common names
-        # English headers, plus the ones Italian banks most often use
-        date_fields = ['date', 'transaction date', 'booking date', 'value date',
-                       'data', 'data operazione', 'data contabile', 'data movimento', 'data valuta']
-        description_fields = ['description', 'details', 'memo', 'narrative', 'transaction details',
-                              'descrizione', 'descrizione operazione', 'descrizione movimento', 'causale', 'dettagli', 'dettaglio']
-        amount_fields = ['amount', 'value', 'debit', 'credit', 'transaction amount',
-                         'importo', 'importo (eur)', 'importo eur', 'importo in eur', 'importo €']
-        currency_fields = ['currency', 'ccy', 'valuta', 'divisa']
-        category_fields = ['category', 'type', 'transaction type', 'categoria']
+        # Handle structured data (CSV/Excel). Headings: English and the ones Italian banks use (columns.py)
+        date_fields, description_fields, amount_fields = DATE_COLUMNS, DESCRIPTION_COLUMNS, AMOUNT_COLUMNS
+        currency_fields, category_fields = CURRENCY_COLUMNS, CATEGORY_COLUMNS
         
         # Find fields (case-insensitive)
         row_lower = {k.lower().strip(): v for k, v in row.items() if v is not None}
@@ -435,11 +430,21 @@ class TransactionParser:
             description = "Transaction"
         
         amount = None
+        # Banks with separate "out" and "in" columns (uscite/entrate, dare/avere): in minus out
+        def filled(value) -> bool:
+            return str(value).strip().lower() not in ("", "nan", "none")
+
+        out_value = next((row_lower[f] for f in DEBIT_COLUMNS if f in row_lower and filled(row_lower[f]) and TransactionParser.parse_amount(row_lower[f]) is not None), None)
+        in_value = next((row_lower[f] for f in CREDIT_COLUMNS if f in row_lower and filled(row_lower[f]) and TransactionParser.parse_amount(row_lower[f]) is not None), None)
+        if out_value is not None or in_value is not None:
+            money_in = abs(TransactionParser.parse_amount(in_value) or 0.0) if in_value is not None else 0.0
+            money_out = abs(TransactionParser.parse_amount(out_value) or 0.0) if out_value is not None else 0.0
+            amount = money_in - money_out
         for field in amount_fields:
+            if amount is not None:
+                break
             if field in row_lower:
                 amount = TransactionParser.parse_amount(row_lower[field])
-                if amount is not None:
-                    break
         
         if amount is None:
             return None
