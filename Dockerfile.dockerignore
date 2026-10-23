@@ -1,0 +1,17 @@
+# Used for the agent image, whose build context is the repository root.
+# Keep secrets, virtualenvs and the other services out of the image and out of the context.
+**/.env
+**/.venv
+**/.git
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/node_modules
+**/.next
+.playwright-mcp
+amazon-temp
+docs
+finance-assistant-api
+finance-assistant-ui
+llm-finance-assistant/tests
+llm-finance-assistant/eval

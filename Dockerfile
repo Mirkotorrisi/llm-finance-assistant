@@ -4,8 +4,9 @@ FROM python:3.13-slim
 # Copy the uv binary from the official image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Set working directory
-WORKDIR /app
+# The build context is the repository root (see docker-compose.yml): the agent imports its tools from
+# finance-mcp and reads the plugin's skill as its system prompt, so the layout mirrors the repo.
+WORKDIR /app/llm-finance-assistant
 
 # Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1
@@ -19,17 +20,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# finance-mcp is a path dependency (../finance-mcp in pyproject.toml)
+COPY finance-mcp /app/finance-mcp
+
 # Install dependencies using uv
 # We bind-mount pyproject.toml and uv.lock to install dependencies without copying the whole code first
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=llm-finance-assistant/uv.lock,target=uv.lock \
+    --mount=type=bind,source=llm-finance-assistant/pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-install-project --no-dev
 
-# Copy the rest of the application
-COPY . .
+# The agent's system prompt
+COPY plugin/skills/finance-assistant /app/plugin/skills/finance-assistant
 
-# Install the project itself (includes context and nodes)
+# Copy the rest of the application
+COPY llm-finance-assistant/ .
+
+# Install the project itself
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
@@ -37,7 +44,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 EXPOSE 8000
 
 # Set environment variables for production
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/llm-finance-assistant/.venv/bin:$PATH"
 
 # Run the agent using uvicorn
 # app:app refers to the 'app' variable in the 'app.py' module

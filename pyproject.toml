@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
-    "langgraph",
+    "finance-mcp",
     "openai",
     "python-dotenv",
     "pandas",
@@ -17,6 +17,10 @@ dependencies = [
     "httpx>=0.28.1",
     "xlrd>=2.0.2",
 ]
+
+[tool.uv.sources]
+# the agent tools (registry, schemas, API client) live in finance-mcp: the OpenAI backend imports them
+finance-mcp = { path = "../finance-mcp" }
 
 [dependency-groups]
 dev = [

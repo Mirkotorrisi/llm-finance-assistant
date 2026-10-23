@@ -5,7 +5,7 @@ FastAPI service between the web UI and the Finance API. It answers the chat with
 | Backend / provider | Engine | Needs |
 |---|---|---|
 | `claude` (default) | headless `claude` on your Claude Code login | the `claude` CLI, logged in |
-| `openai` | OpenAI API (chat: the LangGraph pipeline in `src/workflow/`) | `OPENAI_API_KEY` |
+| `openai` | OpenAI API (chat: function calling over `finance-mcp`'s tools, `src/agent/openai_tools.py`) | `OPENAI_API_KEY` |
 
 Select with `FINANCE_BACKEND=claude|openai`. `FINANCE_LLM_PROVIDER` overrides it for the batch jobs only.
 
@@ -52,9 +52,8 @@ Active backend, model and session counts.
 
 ## 🧱 Layout
 
-- `src/agent/` — backends behind one interface (`claude_code.py`: one long-lived `claude -p --input-format stream-json` per chat session, resumed after idle; `openai_graph.py`).
+- `src/agent/` — backends behind one interface (`claude_code.py`: one long-lived `claude -p --input-format stream-json` per chat session, resumed after idle; `openai_tools.py`: function-calling loop over the same tools and prompt).
 - `src/llm/` — `LLMClient` (`structured`, `web_search`) with Claude and OpenAI implementations, plus batched categorization.
-- `src/workflow/` — the LangGraph pipeline used by the `openai` backend.
 - `src/api_client.py` — HTTP client for the Finance API.
 
 ## 🛠️ Configuration

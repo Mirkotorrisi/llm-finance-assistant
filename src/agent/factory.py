@@ -17,9 +17,9 @@ def create_backend(name: str | None = None) -> AgentBackend:
 
         return ClaudeCodeBackend()
     if name == "openai":
-        from src.agent.openai_graph import OpenAIGraphBackend
+        from src.agent.openai_tools import OpenAIToolsBackend
 
-        return OpenAIGraphBackend()
+        return OpenAIToolsBackend()
     raise ValueError(f"Unknown FINANCE_BACKEND {name!r}. Use 'claude' or 'openai'.")
 
 

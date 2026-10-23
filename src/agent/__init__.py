@@ -1,4 +1,4 @@
-"""Pluggable agent backends (Claude Code headless, legacy OpenAI graph)."""
+"""Pluggable agent backends (Claude Code headless, OpenAI function calling)."""
 
 from src.agent.base import AgentBackend, AgentError
 from src.agent.factory import create_backend, get_backend, shutdown_backend
