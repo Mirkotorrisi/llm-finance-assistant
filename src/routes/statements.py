@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, Header, HTTPExceptio
 from src.api_client import get_api_client, request_context
 from src.llm import get_llm_client
 from src.services import FileProcessor, FileValidationError, TransactionParser
+from src.services.balance_sheet import parse_balance_sheet
 from src.services.classification import classify_for_import
 
 logger = logging.getLogger(__name__)
@@ -168,3 +169,24 @@ async def get_job_status(job_id: str) -> Dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@router.post("/balance-sheet")
+async def read_balance_sheet(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Read a monthly sheet (a row per month, a column per account) and return what it holds: balances per
+    account, income/expenses per account and the free-text notes. Nothing is stored: the UI maps the columns to
+    accounts and saves them as balance snapshots."""
+    raw = await file.read()
+    try:
+        FileProcessor.validate_file(file.filename or "", len(raw))
+        if FileProcessor.sniff_format(raw) == "pdf":
+            raise FileValidationError("A PDF cannot be read as a table: export the sheet as .xlsx or .csv.")
+        sheet = parse_balance_sheet(FileProcessor.read_grid(raw), filename=file.filename)
+    except FileValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not sheet["balances"] and not sheet["flows"]:
+        raise HTTPException(
+            status_code=422,
+            detail="No table with a row per month (gennaio, febbraio, ...) and a column per account was found.",
+        )
+    return sheet

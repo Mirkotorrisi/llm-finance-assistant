@@ -214,18 +214,27 @@ class FileProcessor:
         return records
 
     @staticmethod
+    def read_grid(raw: bytes) -> List[List[Any]]:
+        """Every cell of a spreadsheet-like file (real .xls, .xlsx, HTML or delimited text), row by row."""
+        kind = FileProcessor.sniff_format(raw)
+        try:
+            if kind in ("xlsx", "xls"):
+                return FileProcessor._excel_grid(raw, kind)
+            if kind == "html":
+                return FileProcessor._html_grid(raw)
+            if kind == "text":
+                return FileProcessor._text_grid(raw)
+        except Exception as e:
+            logger.error(f"Error reading {kind} content: {str(e)}")
+            raise FileValidationError(f"Failed to read the file as a {kind} table: {str(e)}")
+        raise FileValidationError("This looks like a PDF but has a spreadsheet extension. Rename it to .pdf.")
+
+    @staticmethod
     def extract_tabular(raw: bytes) -> List[Dict[str, Any]]:
         """Rows of a statement table from any spreadsheet-like content, as dicts keyed by the heading row."""
         kind = FileProcessor.sniff_format(raw)
         try:
-            if kind in ("xlsx", "xls"):
-                grid = FileProcessor._excel_grid(raw, kind)
-            elif kind == "html":
-                grid = FileProcessor._html_grid(raw)
-            elif kind == "text":
-                grid = FileProcessor._text_grid(raw)
-            else:
-                raise FileValidationError("This looks like a PDF but has a spreadsheet extension. Rename it to .pdf.")
+            grid = FileProcessor.read_grid(raw)
             data = FileProcessor._records(grid)
         except FileValidationError:
             raise
