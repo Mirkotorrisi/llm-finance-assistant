@@ -62,6 +62,8 @@ class ClaudeConfig:
             os.getenv("FINANCE_SKILL_PATH", str(REPO_ROOT / "plugin" / "skills" / "finance-assistant" / "SKILL.md"))
         )
     )
+    # further skills appended to the prompt (os.pathsep-separated in FINANCE_EXTRA_SKILL_PATHS); default: the advisor
+    extra_skill_paths: list[Path] = field(default_factory=lambda: default_extra_skill_paths())
     mcp_command: list[str] | None = None  # [command, *args]; resolved lazily when None
     turn_timeout: float = field(default_factory=lambda: float(os.getenv("FINANCE_TURN_TIMEOUT", "180")))
     idle_ttl: float = field(default_factory=lambda: float(os.getenv("FINANCE_SESSION_IDLE_TTL", "900")))
@@ -81,15 +83,34 @@ class ClaudeConfig:
         return ["uv", "run", "--quiet", "--project", str(project), "finance-mcp"]
 
 
+def default_extra_skill_paths() -> list[Path]:
+    raw = os.getenv("FINANCE_EXTRA_SKILL_PATHS")
+    if raw is None:
+        return [REPO_ROOT / "plugin" / "skills" / "advisor" / "SKILL.md"]
+    return [Path(p) for p in raw.split(os.pathsep) if p.strip()]
+
+
+def _skill_body(path: Path) -> str:
+    """A skill file's text without its frontmatter."""
+    return re.sub(r"\A---\n.*?\n---\n", "", path.read_text(encoding="utf-8"), flags=re.DOTALL).strip()
+
+
 def load_system_prompt(cfg: ClaudeConfig, user_id: str, today: str | None = None) -> str:
-    """Skill text (frontmatter stripped) behind a short header with today's date and the user id."""
+    """The skills' text (frontmatter stripped, one after the other) behind a short header with today's date and
+    the user id. The main skill falls back to a built-in prompt when missing; extra skills are skipped."""
     try:
-        body = re.sub(r"\A---\n.*?\n---\n", "", cfg.skill_path.read_text(encoding="utf-8"), flags=re.DOTALL).strip()
+        body = _skill_body(Path(cfg.skill_path))
     except OSError:
         logger.warning("Skill file %s not readable, using built-in prompt", cfg.skill_path)
         body = FALLBACK_PROMPT
+    parts = [body]
+    for extra in getattr(cfg, "extra_skill_paths", None) or []:
+        try:
+            parts.append(_skill_body(Path(extra)))
+        except OSError:
+            logger.warning("Extra skill file %s not readable, skipped", extra)
     header = PROMPT_HEADER.format(today=today or datetime.date.today().isoformat(), user_id=user_id)
-    return f"{header}\n\n{body}"
+    return "\n\n".join([header, *parts])
 
 
 def normalize_component(tool_input: dict[str, Any], index: int) -> dict[str, Any]:

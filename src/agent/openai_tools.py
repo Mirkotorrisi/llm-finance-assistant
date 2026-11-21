@@ -50,9 +50,11 @@ class OpenAIConfig:
     session_ttl: float = field(default_factory=lambda: float(os.getenv("FINANCE_SESSION_TTL", "21600")))
     max_messages: int = field(default_factory=lambda: int(os.getenv("FINANCE_MAX_HISTORY_MESSAGES", "80")))
     skill_path: Path = field(default_factory=lambda: ClaudeConfig().skill_path)
+    extra_skill_paths: list[Path] = field(default_factory=lambda: ClaudeConfig().extra_skill_paths)
 
     def __post_init__(self) -> None:
         self.skill_path = Path(self.skill_path)
+        self.extra_skill_paths = [Path(p) for p in self.extra_skill_paths]
 
 
 @dataclass

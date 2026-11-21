@@ -341,3 +341,30 @@ def test_chat_stream_forwards_the_workspace(monkeypatch):
     monkeypatch.setattr("src.routes.agent_chat.get_backend", lambda: _StubBackend())
     res = TestClient(app).post("/chat/stream", json={"message": "hi", "session_id": "s", "user_id": "u", "workspace_id": 4})
     assert json.loads(res.text.split("\n\n")[0][len("data: "):])["text"] == "s/u/hi/4"
+
+
+def test_system_prompt_appends_extra_skills_and_skips_missing_ones(tmp_path):
+    main = tmp_path / "SKILL.md"
+    main.write_text("---\nname: main\n---\nMain rules.\n")
+    advisor = tmp_path / "advisor.md"
+    advisor.write_text("---\nname: advisor\n---\nAdvisor rules.\n")
+    cfg = ClaudeConfig(skill_path=main, extra_skill_paths=[advisor, tmp_path / "missing.md"])
+    prompt = load_system_prompt(cfg, "u", today="2030-01-02")
+    assert prompt.index("Main rules.") < prompt.index("Advisor rules.")
+    assert "name: advisor" not in prompt
+
+
+def test_extra_skill_paths_come_from_the_environment(monkeypatch, tmp_path):
+    a, b = tmp_path / "a.md", tmp_path / "b.md"
+    monkeypatch.setenv("FINANCE_EXTRA_SKILL_PATHS", f"{a}{__import__('os').pathsep}{b}")
+    assert ClaudeConfig().extra_skill_paths == [a, b]
+    monkeypatch.setenv("FINANCE_EXTRA_SKILL_PATHS", "")
+    assert ClaudeConfig().extra_skill_paths == []
+
+
+def test_shipped_skills_build_one_prompt_of_reasonable_size():
+    cfg = ClaudeConfig()  # the real finance-assistant and advisor skills
+    assert cfg.skill_path.exists() and all(p.exists() for p in cfg.extra_skill_paths)
+    prompt = load_system_prompt(cfg, "u", today="2030-01-02")
+    assert "Financial advisor" in prompt and "render_component" in prompt
+    assert len(prompt) < 40_000, len(prompt)  # the prompt is paid on every turn: keep long texts in references
