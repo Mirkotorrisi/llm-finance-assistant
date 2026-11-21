@@ -45,6 +45,11 @@ FAKE_CLAUDE = textwrap.dedent(
         for chunk in ("Turno ", str(turn), " ok"):
             emit({{"type": "stream_event", "event": {{"type": "content_block_delta",
                   "delta": {{"type": "text_delta", "text": chunk}}}}}})
+        if "cancella" in msg:
+            pending = {{"pending_confirmation": True, "confirmation_id": "abc123def456", "tool": "delete_transaction",
+                       "args": {{"transaction_id": 7}}, "message": "NOT executed"}}
+            emit({{"type": "user", "message": {{"content": [{{"type": "tool_result", "tool_use_id": "d%d" % turn,
+                  "content": [{{"type": "text", "text": json.dumps(pending)}}]}}]}}}})
         emit({{"type": "assistant", "message": {{"content": [{{"type": "tool_use", "id": "t%d" % turn,
               "name": "mcp__finance__render_component",
               "input": {{"type": "TransactionsTable", "title": "Tabella",
@@ -187,6 +192,7 @@ def test_parser_separates_text_blocks_and_dedups_components():
     events = []
     for ev in [block("text"), delta("A"), block("text"), delta("B"), render, render]:
         events += parser.feed(ev)
+    events += parser.finish({"is_error": False, "result": "AB"})  # components are shown on their result, or at the end
     assert "".join(e["text"] for e in events if e["type"] == "text_delta") == "A\n\nB"
     assert sum(e["type"] == "ui_component" for e in events) == 1
 
@@ -368,3 +374,112 @@ def test_shipped_skills_build_one_prompt_of_reasonable_size():
     prompt = load_system_prompt(cfg, "u", today="2030-01-02")
     assert "Financial advisor" in prompt and "render_component" in prompt
     assert len(prompt) < 40_000, len(prompt)  # the prompt is paid on every turn: keep long texts in references
+
+
+def test_a_deferred_destructive_tool_becomes_a_confirmation_card(fake_cfg):
+    """The tool result says pending_confirmation: the UI gets a ConfirmAction card bound to the session's identity,
+    and the gateway remembers it until the user clicks."""
+    from src.agent.confirm import pending_actions
+
+    backend = ClaudeCodeBackend(fake_cfg)
+
+    async def scenario():
+        return [ev async for ev in backend.run_turn("s1", "alice", "cancella la 7", workspace_id=3)]
+
+    events = run(scenario())
+    cards = [e["component"] for e in events if e["type"] == "ui_component" and e["component"]["type"] == "ConfirmAction"]
+    assert len(cards) == 1
+    params = cards[0]["action"]["params"]
+    assert params == {"confirmationId": "abc123def456", "tool": "delete_transaction", "args": {"transaction_id": 7}}
+    assert cards[0] in events[-1]["ui"]["components"]
+    item = pending_actions.pop("abc123def456")
+    assert item and (item.user_id, item.workspace_id, item.tool) == ("alice", 3, "delete_transaction")
+    assert pending_actions.pop("abc123def456") is None  # one click only
+    run(backend.aclose())
+
+
+def test_the_mcp_config_asks_finance_mcp_to_defer_destructive_tools(fake_cfg):
+    backend = ClaudeCodeBackend(fake_cfg)
+    run(collect(backend, "s2", "alice", "ciao"))
+    config = json.loads(next((fake_cfg.home).glob("mcp-*.json")).read_text())
+    assert config["mcpServers"]["finance"]["env"]["FINANCE_MCP_CONFIRM_WRITES"] == "1"
+    run(backend.aclose())
+
+
+def test_chat_confirm_runs_the_pending_tool_as_the_agent_user(monkeypatch):
+    """The click executes the remembered action with the agent's identity; a second click or a bogus id is 404."""
+    import httpx
+    from app import app
+    from src.agent import confirm
+    from src.agent.confirm import pending_actions
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"message": "deleted"})
+
+    class MockedApiClient(confirm.ApiClient):
+        def _http(self):
+            if self._client is None or self._client.is_closed:
+                headers = {"X-User-Id": self.default_user_id}
+                if self.workspace_id is not None:
+                    headers["X-Workspace-Id"] = str(self.workspace_id)
+                self._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=self.base_url, headers=headers)
+            return self._client
+
+    monkeypatch.setattr(confirm, "ApiClient", MockedApiClient)
+    pending = {"pending_confirmation": True, "confirmation_id": "pend0001", "tool": "delete_transaction", "args": {"transaction_id": 9}}
+    assert pending_actions.register(pending, "s", "alice", 4)["type"] == "ConfirmAction"
+    pending_actions.register({**pending, "confirmation_id": "pend0002"}, "s", "alice", 4)
+    client = TestClient(app)
+    res = client.post("/chat/confirm", json={"confirmation_id": "pend0001"})
+    assert res.status_code == 200 and res.json() == {"status": "done", "tool": "delete_transaction", "result": {"message": "deleted"}}
+    assert len(seen) == 1 and seen[0].method == "DELETE" and seen[0].url.path == "/api/transactions/9"
+    assert seen[0].headers["x-user-id"] == "alice" and seen[0].headers["x-workspace-id"] == "4"
+    assert client.post("/chat/confirm", json={"confirmation_id": "pend0001"}).status_code == 404
+    assert client.post("/chat/confirm", json={"confirmation_id": "pend0002", "approve": False}).json() == {"status": "cancelled", "tool": "delete_transaction"}
+    assert len(seen) == 1
+    assert client.post("/chat/confirm", json={"confirmation_id": "nothere1"}).status_code == 404
+
+
+def test_a_component_the_registry_rejected_is_not_shown():
+    """The card is emitted when render_component's result comes back without error, not when the call is made."""
+    parser = TurnParser()
+    call = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "r1", "name": "mcp__finance__render_component", "input": {"type": "SummaryCards"}},
+        {"type": "tool_use", "id": "r2", "name": "mcp__finance__render_component", "input": {"type": "Evil"}},
+    ]}}
+    assert parser.feed(call) == []
+    ok = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "r1", "content": "{\"rendered\": true}"}]}}
+    bad = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "r2", "is_error": True, "content": "Unknown component type"}]}}
+    assert [e["component"]["type"] for e in parser.feed(ok)] == ["SummaryCards"]
+    assert parser.feed(bad) == []
+    final = parser.finish({"is_error": False, "result": "ok"})
+    assert [c["type"] for c in final[-1]["ui"]["components"]] == ["SummaryCards"]
+
+
+def test_components_without_a_tool_result_are_still_shown_at_the_end():
+    parser = TurnParser()
+    parser.feed({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "r1", "name": "mcp__finance__render_component", "input": {"type": "SummaryCards"}}]}})
+    final = parser.finish({"is_error": False, "result": "ok"})
+    assert [e["type"] for e in final] == ["ui_component", "text_delta", "done"]
+
+
+def test_the_process_cap_refuses_a_new_session_when_every_other_is_busy(fake_cfg):
+    """max_sessions is a hard cap: with every live session mid-turn, a new one gets an error instead of a process."""
+    fake_cfg.max_sessions = 1
+    backend = ClaudeCodeBackend(fake_cfg)
+
+    async def scenario():
+        first = backend._session("busy", "u1")
+        async with first.lock:  # a turn in progress
+            await first.start()
+            events = [ev async for ev in backend.run_turn("other", "u2", "ciao")]
+        return events
+
+    events = run(scenario())
+    assert [e["type"] for e in events] == ["error"] and "busy" in events[0]["message"]
+    assert backend.info()["live_processes"] == 1
+    run(backend.aclose())

@@ -5,7 +5,7 @@ import io
 import logging
 from html.parser import HTMLParser
 from typing import List, Dict, Any, BinaryIO, Optional
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 import pandas as pd
 
 from src.services.columns import header_kinds

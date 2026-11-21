@@ -101,7 +101,14 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
             _jobs[job_id]["completed_chunks"] = completed
             _jobs[job_id]["total_chunks"] = total
 
-        transactions = await TransactionParser.extract_async(extracted_data, on_chunk_done=on_chunk_done)
+        failed_chunks: list[str] = []
+        transactions = await TransactionParser.extract_async(
+            extracted_data, on_chunk_done=on_chunk_done, on_failed_chunks=failed_chunks.extend
+        )
+        if failed_chunks:  # pages the model could not read: the import is partial and must say so
+            extras_partial = {"status": "partial", "failed_chunks": failed_chunks}
+        else:
+            extras_partial = {}
 
         extras = await _record_statement_meta(api_client, account_id, meta) if meta else {}
 
@@ -116,6 +123,7 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
                     "transactions_skipped": 0,
                     "transactions": [],
                     **extras,
+                    **extras_partial,
                 },
             }
             return
@@ -147,7 +155,10 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
             "status": "complete",
             "result": {
                 "success": True,
-                "message": f"Successfully processed {imported['added_count']} transactions",
+                "message": (
+                    f"Processed {imported['added_count']} transactions; {len(failed_chunks)} part(s) of the file could not be read"
+                    if failed_chunks else f"Successfully processed {imported['added_count']} transactions"
+                ),
                 "transactions_processed": imported["row_count"],
                 "transactions_added": imported["added_count"],
                 "transactions_skipped": imported["skipped_count"],
@@ -161,6 +172,7 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
                 "absorbed_mute_rows": imported.get("absorbed_mute_rows", 0),
                 "suspect_duplicates": imported.get("suspect_duplicates", 0),
                 **extras,
+                **extras_partial,
             },
         }
 

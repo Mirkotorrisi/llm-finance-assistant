@@ -154,3 +154,24 @@ class TestItalianHeaders:
     def test_a_category_column_in_italian_is_kept(self):
         row = {"Data": "2026-03-05", "Descrizione": "Bar", "Importo": "-3", "Categoria": "Svago"}
         assert TransactionParser.parse_row(row)["category"] == "svago"
+
+
+
+def test_pdf_chunks_the_model_cannot_read_are_reported_not_dropped():
+    """A failed chunk used to vanish silently; now the caller learns which pages are missing."""
+    import asyncio
+
+    from src.llm import LLMError
+    from src.services.transaction_parser import TransactionParser
+
+    class StubLLM:
+        async def structured(self, system, prompt, schema, temperature=0.0):
+            if "page 2" in prompt:
+                raise LLMError("rate limited")
+            return schema(transactions=[{"date": "2026-01-05", "description": "COOP", "amount": -12.5}])
+
+    rows = [{"pdf_text": "page 1 text", "pages": "1"}, {"pdf_text": "page 2 text", "pages": "2"}]
+    failed: list[str] = []
+    out = asyncio.run(TransactionParser.extract_async(rows, llm=StubLLM(), on_failed_chunks=failed.extend))
+    assert len(out) == 1 and out[0]["description"] == "COOP"
+    assert failed == ["2"]

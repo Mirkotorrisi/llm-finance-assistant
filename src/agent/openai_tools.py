@@ -23,6 +23,7 @@ from typing import Any
 
 from finance_mcp.registry import ApiClient, ToolError, call_tool, openai_tools
 
+from src.agent.confirm import confirm_writes_enabled, pending_actions
 from src.agent.base import (
     AgentBackend,
     Event,
@@ -45,6 +46,8 @@ MAX_REMEMBERED_SESSIONS = 50
 class OpenAIConfig:
     model: str = field(default_factory=lambda: os.getenv("FINANCE_OPENAI_MODEL", "gpt-4o-mini"))
     api_url: str = field(default_factory=lambda: os.getenv("FINANCE_API_URL", "http://localhost:8080"))
+    # destructive tools wait for the user's click in the app (FINANCE_CHAT_CONFIRM_WRITES, default on)
+    confirm_writes: bool = field(default_factory=confirm_writes_enabled)
     max_steps: int = field(default_factory=lambda: int(os.getenv("FINANCE_MAX_TOOL_STEPS", "12")))
     turn_timeout: float = field(default_factory=lambda: float(os.getenv("FINANCE_TURN_TIMEOUT", "180")))
     session_ttl: float = field(default_factory=lambda: float(os.getenv("FINANCE_SESSION_TTL", "21600")))
@@ -134,7 +137,7 @@ class OpenAIToolsBackend(AgentBackend):
             conv.messages.append({"role": "user", "content": message})
             api = ApiClient(base_url=self.cfg.api_url, default_user_id=user_id, workspace_id=workspace_id)
             try:
-                async for event in self._loop(conv, api):
+                async for event in self._loop(conv, api, session_id):
                     yield event
                 _trim(conv.messages, self.cfg.max_messages)
             except asyncio.CancelledError:  # the client went away mid-turn
@@ -148,7 +151,7 @@ class OpenAIToolsBackend(AgentBackend):
                 conv.last_used = time.monotonic()
                 await api.aclose()
 
-    async def _loop(self, conv: _Conversation, api: ApiClient) -> AsyncIterator[Event]:
+    async def _loop(self, conv: _Conversation, api: ApiClient, session_id: str = "") -> AsyncIterator[Event]:
         client = self._openai()
         deadline = time.monotonic() + self.cfg.turn_timeout
         system = {"role": "system", "content": load_system_prompt(self.cfg, conv.user_id)}  # type: ignore[arg-type]
@@ -212,7 +215,10 @@ class OpenAIToolsBackend(AgentBackend):
                     conv.messages.append(_tool_message(c["id"], f"Error: invalid arguments: {e}"))
                     continue
                 try:
-                    result = await asyncio.wait_for(call_tool(api, c["name"], args), timeout=max(deadline - time.monotonic(), 1))
+                    result = await asyncio.wait_for(
+                        call_tool(api, c["name"], args, confirm=self.cfg.confirm_writes),
+                        timeout=max(deadline - time.monotonic(), 1),
+                    )
                 except ToolError as e:
                     conv.messages.append(_tool_message(c["id"], f"Error: {e}"))
                     continue
@@ -221,6 +227,10 @@ class OpenAIToolsBackend(AgentBackend):
                     conv.messages.append(_tool_message(c["id"], f"Error: {type(e).__name__}: {e}"))
                     continue
                 conv.messages.append(_tool_message(c["id"], result))
+                pending = pending_actions.register(result, session_id, conv.user_id, conv.workspace_id, len(components))
+                if pending:  # a deferred destructive tool: the user confirms it in the card
+                    components.append(pending)
+                    yield ui_component(pending)
                 if c["name"] == RENDER_TOOL:
                     comp = normalize_component(args, len(components))
                     if comp.get("type"):

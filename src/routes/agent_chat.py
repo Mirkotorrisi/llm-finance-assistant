@@ -3,13 +3,15 @@
 import asyncio
 import json
 import logging
+import os
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.agent import get_backend
+from src.agent.confirm import ToolError, execute, pending_actions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["agent-chat"])
@@ -78,3 +80,25 @@ async def _warm(backend, request: WarmRequest) -> None:
 @router.get("/agent/info")
 async def agent_info():
     return get_backend().info()
+
+
+class ConfirmRequest(BaseModel):
+    confirmation_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,80}$")
+    approve: bool = True
+
+
+@router.post("/chat/confirm")
+async def chat_confirm(request: ConfirmRequest):
+    """Run (or drop) a destructive action the agent proposed. The action is executed with the identity the agent
+    was acting for when it proposed it; an unknown or expired id is 404."""
+    item = pending_actions.pop(request.confirmation_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="This action is no longer pending (already handled or expired)")
+    if not request.approve:
+        return {"status": "cancelled", "tool": item.tool}
+    api_url = os.getenv("FINANCE_API_URL", "http://localhost:8080")
+    try:
+        result = await execute(item, api_url)
+    except ToolError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "done", "tool": item.tool, "result": result}

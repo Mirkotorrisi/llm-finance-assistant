@@ -66,6 +66,10 @@ Rules:
 - Reuse existing categories when appropriate"""
 
 
+class ChunkFailed(Exception):
+    """A PDF chunk (page range) the model could not read: its rows are missing from the result."""
+
+
 class TransactionParser:
     """Service for parsing extracted data into transaction format."""
     
@@ -264,7 +268,7 @@ class TransactionParser:
             return valid
         except LLMError as e:
             logger.warning(f"Skipped chunk {label}: {e}")
-            return []
+            raise ChunkFailed(str(label)) from e
 
     @staticmethod
     async def _parse_rows_async(
@@ -305,6 +309,7 @@ class TransactionParser:
         rows: List[Dict[str, Any]],
         on_chunk_done: Optional[Any] = None,
         llm: Optional[LLMClient] = None,
+        on_failed_chunks: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """Read the transactions out of an uploaded file without deciding their categories.
 
@@ -330,12 +335,18 @@ class TransactionParser:
             for chunk in rows
         ]
         extracted: List[Dict[str, Any]] = []
+        failed: List[str] = []
         completed = 0
         for future in asyncio.as_completed(tasks):
-            extracted.extend(await future)
+            try:
+                extracted.extend(await future)
+            except ChunkFailed as e:
+                failed.append(str(e))
             completed += 1
             if on_chunk_done is not None:
                 on_chunk_done(completed, total)
+        if on_failed_chunks is not None and failed:
+            on_failed_chunks(sorted(failed))
         return extracted
 
     @staticmethod
@@ -371,14 +382,17 @@ class TransactionParser:
 
         all_transactions: List[Dict[str, Any]] = []
         completed = 0
+        skipped = 0
         for future in asyncio.as_completed(tasks):
-            chunk_txns = await future
-            all_transactions.extend(chunk_txns)
+            try:
+                all_transactions.extend(await future)
+            except ChunkFailed:  # legacy path (no caller to report to): the chunk is skipped, as before
+                skipped += 1
             completed += 1
             if on_chunk_done is not None:
                 on_chunk_done(completed, total)
 
-        logger.info(f"PDF parsing complete: {len(all_transactions)} transactions extracted")
+        logger.info(f"PDF parsing complete: {len(all_transactions)} transactions extracted, {skipped} chunks skipped")
         return all_transactions
 
     @staticmethod

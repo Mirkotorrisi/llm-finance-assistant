@@ -64,7 +64,7 @@ def tools(monkeypatch):
     """Replace the registry's executor: record the calls, answer from a dict (or raise what is given)."""
     calls, results = [], {}
 
-    async def fake_call_tool(api, name, args):
+    async def fake_call_tool(api, name, args, **kwargs):
         calls.append((name, args, api.default_user_id, api.workspace_id))
         outcome = results.get(name, {"ok": True})
         if isinstance(outcome, Exception):
@@ -230,3 +230,19 @@ def test_the_client_is_closed_with_the_backend():
 
 def test_the_factory_builds_it():
     assert isinstance(create_backend("openai"), OpenAIToolsBackend)
+
+
+def test_a_deferred_destructive_tool_becomes_a_confirmation_card(tools):
+    """finance-mcp answered pending_confirmation: the model gets that result, the UI a ConfirmAction card, and the
+    gateway remembers the action with the session's identity."""
+    from src.agent.confirm import pending_actions
+
+    tools.results["undo_import"] = {"pending_confirmation": True, "confirmation_id": "oa0001ff", "tool": "undo_import", "args": {"batch_id": 3}}
+    client = FakeOpenAI(call(0, "undo_import", {"batch_id": 3}, "c1"), text("Conferma nella scheda."))
+    events = run(collect(backend(client), user="u9", workspace_id=7))
+    cards = [e["component"] for e in events if e["type"] == "ui_component"]
+    assert len(cards) == 1 and cards[0]["type"] == "ConfirmAction"
+    assert cards[0]["action"]["params"] == {"confirmationId": "oa0001ff", "tool": "undo_import", "args": {"batch_id": 3}}
+    assert events[-1]["ui"]["components"] == cards
+    item = pending_actions.pop("oa0001ff")
+    assert item and (item.user_id, item.workspace_id, item.tool, item.args) == ("u9", 7, "undo_import", {"batch_id": 3})

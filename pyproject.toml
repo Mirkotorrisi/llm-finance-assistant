@@ -11,7 +11,7 @@ dependencies = [
     "openai",
     "python-dotenv",
     "pandas",
-    "pypdf2",
+    "pypdf>=4.0",
     "openpyxl",
     "python-multipart",
     "httpx>=0.28.1",

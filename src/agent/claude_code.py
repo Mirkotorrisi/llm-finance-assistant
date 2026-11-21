@@ -16,11 +16,12 @@ import os
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.agent.confirm import confirm_writes_enabled, pending_actions
 from src.child_env import child_env
 from src.agent.base import (
     AgentBackend,
@@ -54,6 +55,8 @@ Today is {today}. The current user id is {user_id} (tools default to it)."""
 class ClaudeConfig:
     bin: str = field(default_factory=lambda: os.getenv("FINANCE_CLAUDE_BIN", "claude"))
     model: str = field(default_factory=lambda: os.getenv("FINANCE_CLAUDE_MODEL", "haiku"))
+    # destructive tools wait for the user's click in the app (FINANCE_CHAT_CONFIRM_WRITES, default on)
+    confirm_writes: bool = field(default_factory=confirm_writes_enabled)
     api_url: str = field(default_factory=lambda: os.getenv("FINANCE_API_URL", "http://localhost:8080"))
     home: Path = field(
         default_factory=lambda: Path(os.getenv("FINANCE_AGENT_HOME", str(Path.home() / ".finance-assistant" / "agent")))
@@ -130,14 +133,32 @@ def normalize_component(tool_input: dict[str, Any], index: int) -> dict[str, Any
     return {k: v for k, v in comp.items() if v is not None}
 
 
+def _tool_result_json(block: dict[str, Any]) -> dict[str, Any] | None:
+    """The JSON object a tool_result block carries (text content, possibly split in parts), else None."""
+    content = block.get("content")
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+    if not isinstance(content, str) or not content.lstrip().startswith("{"):
+        return None
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 class TurnParser:
     """Turns raw stream-json lines of one turn into backend events."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_pending: Callable[[dict[str, Any], int], dict[str, Any] | None] | None = None) -> None:
         self.text_parts: list[str] = []
         self.components: list[dict[str, Any]] = []
         self._seen_tool_ids: set[str] = set()
         self._streamed = False
+        # turns a ``pending_confirmation`` tool result into the ConfirmAction component to show (None: ignore)
+        self._on_pending = on_pending
+        # render_component calls seen in the assistant message, shown once their tool_result says they were accepted
+        self._proposed: dict[str, dict[str, Any]] = {}
 
     def feed(self, ev: dict[str, Any]) -> list[Event]:
         out: list[Event] = []
@@ -163,6 +184,29 @@ class TurnParser:
                     self.text_parts.append(delta["text"])
                     out.append(text_delta(delta["text"]))
 
+        elif etype == "user":
+            # tool results come back as user messages; a deferred destructive tool is shown as a confirmation card
+            for block in (ev.get("message") or {}).get("content") or []:
+                if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                    continue
+                proposed = self._proposed.pop(block.get("tool_use_id"), None)
+                if proposed is not None:
+                    if not block.get("is_error"):  # a rejected component (unknown type, bad action) is not shown
+                        proposed["order"] = len(self.components)
+                        self.components.append(proposed)
+                        out.append(ui_component(proposed))
+                    continue
+                if self._on_pending is None:
+                    continue
+                payload = _tool_result_json(block)
+                if payload is None or block.get("tool_use_id") in self._seen_tool_ids:
+                    continue
+                comp = self._on_pending(payload, len(self.components))
+                if comp:
+                    self._seen_tool_ids.add(block.get("tool_use_id"))
+                    self.components.append(comp)
+                    out.append(ui_component(comp))
+
         elif etype == "assistant":
             for block in (ev.get("message") or {}).get("content") or []:
                 if (
@@ -174,8 +218,7 @@ class TurnParser:
                     self._seen_tool_ids.add(block.get("id"))
                     comp = normalize_component(block.get("input") or {}, len(self.components))
                     if comp.get("type"):
-                        self.components.append(comp)
-                        out.append(ui_component(comp))
+                        self._proposed[block.get("id")] = comp
 
         return out
 
@@ -183,6 +226,11 @@ class TurnParser:
         if result.get("is_error"):
             return [error(str(result.get("result") or "The agent failed to answer."))]
         out: list[Event] = []
+        for comp in self._proposed.values():  # no tool_result seen for them (older CLI output): show them anyway
+            comp["order"] = len(self.components)
+            self.components.append(comp)
+            out.append(ui_component(comp))
+        self._proposed.clear()
         final_text = "".join(self.text_parts)
         if not self._streamed:
             # partial messages unavailable: fall back to the final text
@@ -224,6 +272,7 @@ class ClaudeSession:
                                 "FINANCE_API_URL": self.cfg.api_url,
                                 "FINANCE_GATEWAY_URL": os.getenv("FINANCE_GATEWAY_URL", "http://127.0.0.1:8000"),
                                 "FINANCE_USER_ID": self.user_id,
+                                **({"FINANCE_MCP_CONFIRM_WRITES": "1"} if self.cfg.confirm_writes else {}),
                                 **({"FINANCE_WORKSPACE_ID": str(self.workspace_id)} if self.workspace_id is not None else {}),
                             },
                         }
@@ -291,7 +340,11 @@ class ClaudeSession:
             self.last_used = time.monotonic()
             await self.start()
             assert self.proc and self.proc.stdin and self.proc.stdout
-            parser = TurnParser()
+            parser = TurnParser(
+                on_pending=lambda payload, order: pending_actions.register(
+                    payload, self.session_id, self.user_id, self.workspace_id, order
+                )
+            )
             finished = False
             today = datetime.date.today().isoformat()
             payload = {"type": "user", "message": {"role": "user", "content": f"[today: {today}] {message}"}}
@@ -376,10 +429,18 @@ class ClaudeCodeBackend(AgentBackend):
             await session.kill()
 
     def _limit_live_processes(self, keep: str) -> None:
-        others = [s for s in self._sessions.values() if s.alive and s.session_id != keep and not s.lock.locked()]
-        excess = len(others) - (self.cfg.max_sessions - 1)
-        for victim in sorted(others, key=lambda s: s.last_used)[: max(excess, 0)]:
+        """Keep at most ``max_sessions`` processes: idle ones are stopped (resumed later), and when the others are all
+        busy with a turn the new one is refused instead of spawning a process beyond the cap."""
+        live = [s for s in self._sessions.values() if s.session_id != keep and (s.alive or s.lock.locked())]
+        idle = [s for s in live if not s.lock.locked()]
+        excess = len(live) - (self.cfg.max_sessions - 1)
+        for victim in sorted(idle, key=lambda s: s.last_used)[: max(excess, 0)]:
             asyncio.create_task(self._stop(victim))
+        busy = len(live) - len(idle)
+        if busy >= self.cfg.max_sessions:
+            raise AgentError(
+                f"The assistant is busy with {busy} other conversations right now; please try again in a moment."
+            )
 
     def _forget_over_limit(self, keep: str) -> None:
         while len(self._sessions) > MAX_REMEMBERED_SESSIONS:
@@ -408,7 +469,12 @@ class ClaudeCodeBackend(AgentBackend):
     async def run_turn(
         self, session_id: str, user_id: str, message: str, workspace_id: int | None = None
     ) -> AsyncIterator[Event]:
-        async for ev in self._session(session_id, user_id, workspace_id).turn(message):
+        try:
+            session = self._session(session_id, user_id, workspace_id)
+        except AgentError as e:  # over the process cap with every other session busy
+            yield error(str(e))
+            return
+        async for ev in session.turn(message):
             yield ev
 
     async def warm(self, session_id: str, user_id: str, workspace_id: int | None = None) -> None:
