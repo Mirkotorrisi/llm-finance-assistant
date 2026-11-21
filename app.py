@@ -18,6 +18,7 @@ from src.routes.search import router as search_router
 from src.routes.statements import router as statements_router
 
 from src.api_client import get_api_client, reset_api_client
+from src.single_process import assert_single_process
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)  # its INFO line prints full URLs (bank account uids)
@@ -43,6 +44,7 @@ def cors_origins() -> list:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    assert_single_process("llm-finance-assistant")  # chat sessions, jobs and confirmations live in this process
     logger.info("Finance agent starting up — API client initialised lazily on first request")
     install_log_redaction()  # bank authorization codes never reach the access log
     bank_scheduler().start()  # no-op unless Enable Banking is configured and FINANCE_BANK_SYNC=auto

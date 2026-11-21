@@ -17,7 +17,7 @@ import uuid
 import httpx
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from src.api_client import FinanceApiClient, request_context
@@ -189,7 +189,7 @@ class BankSync:
 
     async def _record(self, connection_id: int, report: SyncReport) -> None:
         changes: dict[str, Any] = {
-            "last_sync_at": datetime.utcnow().isoformat(),
+            "last_sync_at": datetime.now(timezone.utc).isoformat(),
             "last_sync_status": report.status,
             "last_error": report.error or "; ".join(f"{a.link_id}: {a.error}" for a in report.accounts if a.error) or None,
         }
@@ -302,7 +302,7 @@ async def complete_consent(
     session = await client.create_session(code)
     ref = uuid.uuid4().hex
     # the secret is stored first: whatever happens next, the consent the user just gave is not lost
-    store.put_session(ref, {"session_id": session["session_id"], "aspsp": session.get("aspsp"), "created": datetime.utcnow().isoformat()})
+    store.put_session(ref, {"session_id": session["session_id"], "aspsp": session.get("aspsp"), "created": datetime.now(timezone.utc).isoformat()})
     accounts = await session_accounts(client, session)
     valid_until = (session.get("access") or {}).get("valid_until")
     body = {
