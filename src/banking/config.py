@@ -6,7 +6,15 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 DEFAULT_SECRETS_DIR = Path.home() / ".finance-assistant" / "secrets"
+
+# The gateway's own .env first, then the repository root's: variables already in the environment always win.
+_HERE = Path(__file__).resolve()
+for _candidate in (_HERE.parents[2] / ".env", _HERE.parents[3] / ".env"):
+    if _candidate.is_file():
+        load_dotenv(_candidate, override=False)
 
 
 def _env(name: str, default: str) -> str:
@@ -28,6 +36,10 @@ class BankingConfig:
     language: str = field(default_factory=lambda: _env("ENABLE_BANKING_LANGUAGE", "it"))
     sync_mode: str = field(default_factory=lambda: _env("FINANCE_BANK_SYNC", "auto").lower())  # auto | off
     sync_interval_hours: float = field(default_factory=lambda: float(_env("FINANCE_BANK_SYNC_INTERVAL_HOURS", "12")))
+    # PSU headers on data calls made while the user is present: "off" (none: proven to work, counts as unattended),
+    # "auto" (look up the computer's public IP once and send it as Psu-Ip-Address) or an explicit IP. Private LAN
+    # addresses are rejected by some banks (UniCredit), so the local address is never sent.
+    psu_ip: str = field(default_factory=lambda: _env("FINANCE_BANK_PSU_IP", "off"))
     initial_history_days: int = 89  # beyond 90 days many banks ask for another SCA
     overlap_days: int = 7  # re-fetch a few days before the last known transaction: late bookings, corrections
 
@@ -47,6 +59,7 @@ class BankingConfig:
             "redirect_url": self.callback_url,
             "sync_mode": self.sync_mode,
             "sync_interval_hours": self.sync_interval_hours,
+            "psu_ip": self.psu_ip,
             "consent_days": self.consent_days,
             "secrets_dir": str(self.secrets_dir),
         }

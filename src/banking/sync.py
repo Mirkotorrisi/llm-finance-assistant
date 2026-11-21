@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import logging
 import uuid
+
+import httpx
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Dict, List
 
 from src.api_client import FinanceApiClient, request_context
 from src.banking.config import BankingConfig
@@ -28,6 +30,30 @@ from src.services.classification import classify_for_import
 logger = logging.getLogger(__name__)
 
 ClientFactory = Callable[[], EnableBankingClient]
+
+
+_PUBLIC_IP_CACHE: Dict[str, Any] = {"ip": None, "at": 0.0}
+PUBLIC_IP_TTL = 3600.0
+
+
+async def psu_headers_for(cfg: BankingConfig, user_present: bool) -> Dict[str, str]:
+    """Headers telling the bank the user is behind the call. Only when the user pressed the button and the policy
+    asks for it; scheduled runs send none (they are unattended, and banks cap those at a few per day)."""
+    if not user_present or cfg.psu_ip in ("", "off"):
+        return {}
+    ip = cfg.psu_ip
+    if ip == "auto":
+        import time
+
+        if _PUBLIC_IP_CACHE["ip"] is None or time.time() - _PUBLIC_IP_CACHE["at"] > PUBLIC_IP_TTL:
+            try:
+                async with httpx.AsyncClient(timeout=10) as web:
+                    _PUBLIC_IP_CACHE["ip"] = (await web.get("https://api.ipify.org")).text.strip()
+                    _PUBLIC_IP_CACHE["at"] = time.time()
+            except httpx.HTTPError:
+                return {}
+        ip = _PUBLIC_IP_CACHE["ip"] or ""
+    return {"Psu-Ip-Address": ip} if ip else {}
 
 
 @dataclass
@@ -127,6 +153,7 @@ class BankSync:
             return report
 
         client = self.client()
+        psu_headers = psu_headers or None
         try:
             for link in connection.get("accounts") or []:
                 if not link.get("enabled") or not link.get("account_id") or not link.get("bank_uid"):
@@ -236,6 +263,32 @@ class BankSync:
 # ---------------------------------------------------------------------- consent completion (shared by the routes)
 
 
+class ConsentError(Exception):
+    """The consent exists at the bank but could not be registered in the app."""
+
+
+def _api_detail(exc: httpx.HTTPStatusError) -> str:
+    try:
+        detail = exc.response.json().get("detail")
+    except ValueError:
+        detail = exc.response.text
+    if isinstance(detail, list):  # pydantic validation errors: field path and message, never the input value
+        return "; ".join(f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg')}" for e in detail)
+    return str(detail)[:300]
+
+
+async def session_accounts(client: EnableBankingClient, session: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Account summaries of a session. ``POST /sessions`` returns full account objects, ``GET /sessions/{id}`` only
+    their uids: in that case each account's details are fetched."""
+    out: List[Dict[str, Any]] = []
+    for item in session.get("accounts") or []:
+        if isinstance(item, str):
+            item = await client.account_details(item)
+        if isinstance(item, dict):
+            out.append(account_summary(item))
+    return out
+
+
 async def complete_consent(
     client: EnableBankingClient,
     store: SecretStore,
@@ -247,8 +300,9 @@ async def complete_consent(
     Returns the API's connection record."""
     session = await client.create_session(code)
     ref = uuid.uuid4().hex
-    accounts = [account_summary(a) for a in session.get("accounts") or []]
+    # the secret is stored first: whatever happens next, the consent the user just gave is not lost
     store.put_session(ref, {"session_id": session["session_id"], "aspsp": session.get("aspsp"), "created": datetime.utcnow().isoformat()})
+    accounts = await session_accounts(client, session)
     valid_until = (session.get("access") or {}).get("valid_until")
     body = {
         "provider": "enablebanking",
@@ -261,7 +315,12 @@ async def complete_consent(
         "renew_connection_id": pending.get("connection_id"),
     }
     with request_context(pending.get("workspace_id"), pending.get("user_id")):
-        connection = await api.request("POST", "/api/bank-connections", json=body)
+        try:
+            connection = await api.request("POST", "/api/bank-connections", json=body)
+        except httpx.HTTPStatusError as exc:
+            detail = _api_detail(exc)
+            logger.error("Consent completed at the bank but the API refused the connection record (%s)", detail)
+            raise ConsentError(f"The bank accepted the consent but the app could not save it: {detail}") from exc
     old_ref = pending.get("old_session_ref")
     if old_ref and old_ref != ref:
         store.delete_session(old_ref)

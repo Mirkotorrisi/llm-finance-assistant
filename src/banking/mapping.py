@@ -22,7 +22,8 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
     """What the API keeps about a bank account (never the full IBAN)."""
     ident = account.get("account_id") or {}
     other = ident.get("other") or {}
-    label = account.get("product") or account.get("name") or account.get("details") or other.get("identification") or "Conto"
+    # the product or the bank's own description first: the holder's name is the same on every account
+    label = account.get("product") or account.get("details") or account.get("name") or other.get("identification") or "Conto"
     return {
         "identification_hash": account.get("identification_hash") or account.get("uid") or "",
         "bank_uid": account.get("uid"),

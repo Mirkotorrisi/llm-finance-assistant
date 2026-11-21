@@ -28,6 +28,7 @@ def no_real_llm(monkeypatch, tmp_path):
     # bank sync never reaches a real bank in tests: unconfigured, scheduler off, secrets in a temp folder
     monkeypatch.setenv("FINANCE_BANK_SYNC", "off")
     monkeypatch.delenv("ENABLE_BANKING_APP_ID", raising=False)
+    monkeypatch.delenv("ENABLE_BANKING_REDIRECT_URL", raising=False)  # the developer's own .env must not leak in
     monkeypatch.setenv("FINANCE_SECRETS_DIR", str(tmp_path / "secrets"))
     monkeypatch.setenv("ENABLE_BANKING_KEY_PATH", str(tmp_path / "missing.pem"))
     from src.routes import banking as banking_routes

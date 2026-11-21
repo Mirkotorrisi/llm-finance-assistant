@@ -16,7 +16,7 @@ from src.banking.config import BankingConfig
 from src.banking.enable_banking import EnableBankingClient, EnableBankingError
 from src.banking.scheduler import BankSyncScheduler
 from src.banking.secrets import SecretStore
-from src.banking.sync import BankSync, complete_consent
+from src.banking.sync import BankSync, ConsentError, complete_consent, psu_headers_for
 from src.llm import get_llm_client
 
 logger = logging.getLogger(__name__)
@@ -77,17 +77,6 @@ class _SyncProxy:
     async def sync_due(self):
         sync = await make_sync()
         return await sync.sync_due()
-
-
-def _psu_headers(request: Request) -> dict[str, str]:
-    """The user is present (they pressed the button): tell the bank, so the call does not count as unattended."""
-    headers = {}
-    if request.client and request.client.host:
-        headers["Psu-Ip-Address"] = request.client.host
-    agent = request.headers.get("user-agent")
-    if agent:
-        headers["Psu-User-Agent"] = agent[:200]
-    return headers
 
 
 def _bank_error(exc: EnableBankingError) -> HTTPException:
@@ -189,6 +178,8 @@ async def _finish(code: str, state: str) -> dict[str, Any]:
         return await complete_consent(client, store(), await get_api_client(), pending, code)
     except EnableBankingError as exc:
         raise _bank_error(exc)
+    except ConsentError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
     finally:
         await client.aclose()
 
@@ -247,7 +238,7 @@ async def sync_now(
         raise HTTPException(status_code=503, detail="Bank connections are not configured")
     async with scheduler().lock:
         sync = await make_sync()
-        reports = await sync.sync_workspace(x_workspace_id, x_user_id, body.connection_id, psu_headers=_psu_headers(request))
+        reports = await sync.sync_workspace(x_workspace_id, x_user_id, body.connection_id, psu_headers=await psu_headers_for(config(), user_present=True))
     return {"reports": [r.to_dict() for r in reports]}
 
 

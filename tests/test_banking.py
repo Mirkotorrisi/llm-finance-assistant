@@ -481,3 +481,83 @@ def test_forget_revokes_at_the_bank_and_deletes_the_secret(banking_app):
     assert gone.status_code == 200
     assert bank.deleted_sessions == ["sess-zz"] and conn["id"] not in api.connections
     assert routes.store().get_session(conn["session_ref"]) is None
+
+
+# ── access log redaction ─────────────────────────────────────────────────────────
+
+
+def test_callback_codes_are_blanked_in_access_logs(caplog):
+    from src.banking.logging import RedactCallbackFilter, redact_query
+
+    assert redact_query('GET /banking/callback?code=abc123&state=s9 HTTP/1.1') == 'GET /banking/callback?code=***&state=*** HTTP/1.1'
+    assert redact_query("/api/transactions?category=code") == "/api/transactions?category=code"
+    logger = logging.getLogger("uvicorn.access")
+    logger.addFilter(RedactCallbackFilter())
+    try:
+        with caplog.at_level(logging.INFO, logger="uvicorn.access"):
+            logger.info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:1", "GET", "/banking/callback?code=SECRET&state=ST", "1.1", 302)
+            logger.info('%s - "%s %s HTTP/%s" %d', "127.0.0.1:1", "GET", "/banking/status?code=keep", "1.1", 200)
+    finally:
+        logger.filters.clear()
+    assert "SECRET" not in caplog.text and "code=***&state=***" in caplog.text
+    assert "code=keep" in caplog.text  # only the callback path is touched
+
+
+def test_callback_redaction_end_to_end(banking_app, caplog):
+    client, bank, api, routes = banking_app
+    from src.banking.logging import install
+
+    install()
+    started = client.post("/banking/connect", json={"aspsp_name": "UniCredit", "country": "IT"}, headers={"X-Workspace-Id": "1"}).json()
+    with caplog.at_level(logging.INFO):
+        client.get("/banking/callback", params={"code": "VERYSECRET", "state": started["state"]}, follow_redirects=False)
+    assert "VERYSECRET" not in caplog.text
+
+
+async def test_session_accounts_fetches_details_when_only_uids_are_given(rsa_key):
+    from src.banking.sync import session_accounts
+
+    bank = FakeBank()
+    details = {"uid": "u1", "identification_hash": "h" * 133, "account_id": {"iban": "IT60X0542811101000000123456"}, "name": "ROSSI MARIO", "currency": "EUR", "cash_account_type": "CACC"}
+
+    def handler(request):
+        if request.url.path == "/accounts/u1/details":
+            return httpx.Response(200, json=details)
+        return bank.handler(request)
+
+    client = EnableBankingClient("app-1", rsa_key[0], transport=httpx.MockTransport(handler))
+    out = await session_accounts(client, {"accounts": ["u1"]})
+    await client.aclose()
+    assert out == [{"identification_hash": "h" * 133, "bank_uid": "u1", "iban_masked": "IT60 •••• 3456", "label": "ROSSI MARIO", "currency": "EUR", "cash_account_type": "CACC"}]
+
+
+def test_api_refusal_after_consent_keeps_the_secret_and_explains(banking_app):
+    client, bank, api, routes = banking_app
+
+    async def refusing(method, path, json=None, params=None):
+        if path == "/api/bank-connections" and method == "POST":
+            request = httpx.Request("POST", "http://api.test/api/bank-connections")
+            response = httpx.Response(422, json={"detail": [{"loc": ["body", "accounts", 0, "identification_hash"], "msg": "String should have at most 128 characters", "input": "SECRET-HASH"}]}, request=request)
+            raise httpx.HTTPStatusError("422", request=request, response=response)
+        return await FakeApi.request(api, method, path, json, params)
+
+    api.request = refusing
+    started = client.post("/banking/connect", json={"aspsp_name": "UniCredit", "country": "IT"}, headers={"X-Workspace-Id": "1"}).json()
+    done = client.get("/banking/callback", params={"code": "c1", "state": started["state"]}, follow_redirects=False)
+    assert done.status_code == 302 and "error=" in done.headers["location"]
+    assert "identification_hash" in done.headers["location"] and "SECRET-HASH" not in done.headers["location"]
+    # the session the bank granted is still in the store, so it can be recovered without a new consent
+    stored = routes.store()._load()["sessions"]
+    assert any(v["session_id"] == "sess-c1" for v in stored.values())
+
+
+async def test_psu_headers_follow_the_policy(monkeypatch):
+    from src.banking import sync as sync_module
+    from src.banking.sync import psu_headers_for
+
+    assert await psu_headers_for(BankingConfig(psu_ip="off"), user_present=True) == {}
+    assert await psu_headers_for(BankingConfig(psu_ip="auto"), user_present=False) == {}
+    assert await psu_headers_for(BankingConfig(psu_ip="203.0.113.9"), user_present=True) == {"Psu-Ip-Address": "203.0.113.9"}
+    monkeypatch.setitem(sync_module._PUBLIC_IP_CACHE, "ip", "198.51.100.7")
+    monkeypatch.setitem(sync_module._PUBLIC_IP_CACHE, "at", 10**12)
+    assert await psu_headers_for(BankingConfig(psu_ip="auto"), user_present=True) == {"Psu-Ip-Address": "198.51.100.7"}

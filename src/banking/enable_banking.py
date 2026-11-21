@@ -124,6 +124,12 @@ class EnableBankingClient:
 
     # ------------------------------------------------------------------ account data
 
+    async def account_details(self, account_uid: str, psu_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """The AccountResource of one account (``GET /sessions/{id}`` lists only the uids)."""
+        data = await self._request("GET", f"/accounts/{account_uid}/details", headers=psu_headers) or {}
+        data.setdefault("uid", account_uid)
+        return data
+
     async def balances(self, account_uid: str, psu_headers: dict[str, str] | None = None) -> list[dict[str, Any]]:
         data = await self._request("GET", f"/accounts/{account_uid}/balances", headers=psu_headers)
         return list((data or {}).get("balances") or [])
