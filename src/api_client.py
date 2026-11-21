@@ -106,6 +106,19 @@ class FinanceApiClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json: Any = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """A plain scoped call to the API for endpoints outside the tool map (bank connections, snapshots)."""
+        client = self._get_client()
+        resp = await client.request(method, path, json=json, params=params, headers=scope_headers())
+        resp.raise_for_status()
+        return resp.json()
+
     async def disconnect(self):
         if self._client and not self._client.is_closed:
             await self._client.aclose()

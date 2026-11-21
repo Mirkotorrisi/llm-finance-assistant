@@ -221,6 +221,7 @@ class ClaudeSession:
                             "args": args,
                             "env": {
                                 "FINANCE_API_URL": self.cfg.api_url,
+                                "FINANCE_GATEWAY_URL": os.getenv("FINANCE_GATEWAY_URL", "http://127.0.0.1:8000"),
                                 "FINANCE_USER_ID": self.user_id,
                                 **({"FINANCE_WORKSPACE_ID": str(self.workspace_id)} if self.workspace_id is not None else {}),
                             },
