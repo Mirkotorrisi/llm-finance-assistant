@@ -1,5 +1,6 @@
 """Statement upload and ingestion endpoints."""
 
+import asyncio
 import hashlib
 import io
 import logging
@@ -14,6 +15,7 @@ from src.llm import get_llm_client
 from src.services import FileProcessor, FileValidationError, TransactionParser
 from src.services.balance_sheet import parse_balance_sheet
 from src.services.classification import classify_for_import
+from src.uploads import read_upload
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/statements", tags=["statements"])
@@ -73,10 +75,9 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
         _jobs[job_id]["step"] = "extracting"
 
         try:
-            extracted_data = FileProcessor.process_file(
-                filename,
-                io.BytesIO(file_content),
-                len(file_content),
+            # PDF and spreadsheet parsing is CPU work: off the event loop, or every chat stream stalls meanwhile
+            extracted_data = await asyncio.to_thread(
+                FileProcessor.process_file, filename, io.BytesIO(file_content), len(file_content)
             )
         except FileValidationError as e:
             logger.error(f"File validation error: {str(e)}")
@@ -180,11 +181,8 @@ async def upload_statement(
     x_user_id: Optional[str] = Header(default=None),
 ) -> Dict[str, str]:
     """Read the file and start processing in background. Returns a job_id for polling."""
-    try:
-        file_content = await file.read()
-        logger.info(f"Received file upload: {file.filename}, size: {len(file_content)} bytes")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
+    file_content = await read_upload(file)
+    logger.info(f"Received file upload: {file.filename}, size: {len(file_content)} bytes")
 
     job_id = str(uuid4())
     _jobs[job_id] = {
@@ -213,12 +211,16 @@ async def read_balance_sheet(file: UploadFile = File(...)) -> Dict[str, Any]:
     """Read a monthly sheet (a row per month, a column per account) and return what it holds: balances per
     account, income/expenses per account and the free-text notes. Nothing is stored: the UI maps the columns to
     accounts and saves them as balance snapshots."""
-    raw = await file.read()
-    try:
+    raw = await read_upload(file)
+
+    def _read() -> Dict[str, Any]:
         FileProcessor.validate_file(file.filename or "", len(raw))
         if FileProcessor.sniff_format(raw) == "pdf":
             raise FileValidationError("A PDF cannot be read as a table: export the sheet as .xlsx or .csv.")
-        sheet = parse_balance_sheet(FileProcessor.read_grid(raw), filename=file.filename)
+        return parse_balance_sheet(FileProcessor.read_grid(raw), filename=file.filename)
+
+    try:
+        sheet = await asyncio.to_thread(_read)
     except FileValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not sheet["balances"] and not sheet["flows"]:

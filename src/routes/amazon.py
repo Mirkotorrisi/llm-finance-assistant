@@ -14,6 +14,7 @@ from src.api_client import get_api_client, request_context
 from src.llm import get_llm_client
 from src.llm.classify import leaf_categories
 from src.services.classification import classify_orders
+from src.uploads import read_upload
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/amazon", tags=["amazon"])
@@ -145,11 +146,8 @@ async def upload_amazon_orders(
     re-categorizes them via LLM based on the products actually purchased.
     Returns a job_id for polling via GET /amazon/jobs/{job_id}.
     """
-    try:
-        file_content = await file.read()
-        logger.info(f"Received Amazon order history upload: {file.filename}, size: {len(file_content)} bytes")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
+    file_content = await read_upload(file)
+    logger.info(f"Received Amazon order history upload: {file.filename}, size: {len(file_content)} bytes")
 
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only .csv files are supported")

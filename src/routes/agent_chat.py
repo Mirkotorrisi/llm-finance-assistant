@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.agent import get_backend
 
@@ -15,17 +15,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["agent-chat"])
 
 
+# Session and user ids are client-generated UUIDs (or similar plain tokens). They end up in the agent's system
+# prompt, in environment variables and in file names, so anything beyond a token is refused at the door.
+IDENT = Field(pattern=r"^[A-Za-z0-9_.:-]{1,80}$")
+MAX_MESSAGE_CHARS = 20_000
+
+
 class StreamChatRequest(BaseModel):
-    message: str
-    session_id: str
-    user_id: str = "anonymous"
-    workspace_id: Optional[int] = None  # the project (workspace) being worked in; default project when omitted
+    message: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
+    session_id: str = IDENT
+    user_id: str = Field(default="anonymous", pattern=r"^[A-Za-z0-9_.:-]{1,80}$")
+    workspace_id: Optional[int] = Field(default=None, ge=1)  # the project being worked in; default project when omitted
 
 
 class WarmRequest(BaseModel):
-    session_id: str
-    user_id: str = "anonymous"
-    workspace_id: Optional[int] = None
+    session_id: str = IDENT
+    user_id: str = Field(default="anonymous", pattern=r"^[A-Za-z0-9_.:-]{1,80}$")
+    workspace_id: Optional[int] = Field(default=None, ge=1)
 
 
 def _sse(event: dict) -> str:

@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from src.child_env import child_env
 from src.llm.base import LLMClient, LLMError, T
 
 
@@ -55,6 +56,7 @@ class ClaudeClient(LLMClient):
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env=child_env(),
                 )
             except OSError as e:
                 raise LLMError(f"Cannot start '{self.bin}': {e}") from e

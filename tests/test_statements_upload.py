@@ -171,10 +171,15 @@ def test_unsupported_format_is_reported_on_the_job(env):
     assert job["status"] == "error" and "Unsupported file format" in job["error"]
 
 
-def test_oversized_file_is_reported_on_the_job(env):
+def test_oversized_file_is_refused_before_it_is_buffered(env):
+    """The body is read in chunks and refused at the cap (413): nothing is queued, no multi-GB buffer is held."""
     client, _, _ = env
-    job = upload(client, "big.csv", b"date,description,amount\n" * 600_000)
-    assert job["status"] == "error" and "exceeds maximum limit" in job["error"]
+    res = client.post(
+        "/statements/upload",
+        files={"file": ("big.csv", io.BytesIO(b"date,description,amount\n" * 600_000), "text/csv")},
+        data={"account_id": "1"},
+    )
+    assert res.status_code == 413 and "exceeds maximum limit" in res.json()["detail"]
 
 
 def test_unknown_job_is_404(env):

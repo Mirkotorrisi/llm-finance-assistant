@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.child_env import child_env
 from src.agent.base import (
     AgentBackend,
     AgentError,
@@ -257,6 +258,7 @@ class ClaudeSession:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self.cfg.home),
+            env=child_env(),  # the user's login, not the deployment's API keys
             limit=2**24,
         )
         self._stderr_task = asyncio.create_task(self._drain_stderr(self.proc))
