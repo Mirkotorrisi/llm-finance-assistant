@@ -352,6 +352,7 @@ async def test_mute_rows_skip_the_model_and_the_next_sync_overlaps(tmp_path, rsa
     assert patched_classifier == ["ESSELUNGA SPA PAGAMENTO POS CARTA 1234"]  # the mute row never reached the model
     rows = {r["description"]: r for r in api.imports[0]["transactions"]}
     assert rows["Movimento Trade Republic"]["category"] == "uncategorized" and rows["Movimento Trade Republic"]["category_source"] == "fallback"
+    assert rows["Movimento Trade Republic"]["mute"] is True and "mute" not in rows["ESSELUNGA SPA PAGAMENTO POS CARTA 1234"]
     tx_call = next(c for c in bank.calls if c.url.path.endswith("/transactions"))
     assert tx_call.url.params["date_from"] == "2026-11-03"  # last known minus 7 days
 

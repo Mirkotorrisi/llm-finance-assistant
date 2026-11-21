@@ -77,6 +77,18 @@ class FileProcessor:
                 logger.warning("No extractable text found in PDF")
                 return []
 
+            # statements with a known layout are read with rules (no model): rows plus closing balance and holdings
+            from src.services.broker_statements import parse as parse_known_statement
+
+            known = parse_known_statement("\n".join(pages_text))
+            if known is not None:
+                rows, meta = known
+                logger.info("PDF: known %s layout, %d row(s) read locally", meta.get("kind"), len(rows))
+                if rows:
+                    rows[0] = {**rows[0], "__meta__": meta}
+                    return rows
+                return [{"__meta__": meta, "date": None}]
+
             chunk_size = FileProcessor.PAGES_PER_CHUNK
             chunks = []
             for i in range(0, len(pages_text), chunk_size):

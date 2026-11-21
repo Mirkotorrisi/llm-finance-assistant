@@ -34,6 +34,33 @@ async def _process_statement(
         await _run_statement_job(job_id, filename, file_content, account_id)
 
 
+async def _record_statement_meta(api_client, account_id: int, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The closing balance becomes a recorded balance (source import); the holdings seed the instruments with the
+    statement's own prices. Failures are reported, never fatal: the rows were still imported."""
+    out: Dict[str, Any] = {}
+    if meta.get("closing_balance") is not None and meta.get("closing_date"):
+        try:
+            await api_client.request(
+                "POST", "/api/balance-snapshots/bulk",
+                json={"snapshots": [{"account_id": account_id, "date": meta["closing_date"], "balance": meta["closing_balance"]}], "source": "import"},
+            )
+            out["closing_balance"] = {"date": meta["closing_date"], "balance": meta["closing_balance"]}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Statement closing balance not recorded: %s", e)
+            out["closing_balance_error"] = str(e)[:200]
+    if meta.get("holdings"):
+        try:
+            result = await api_client.request(
+                "POST", "/api/portfolio/holdings",
+                json={"account_id": account_id, "as_of": meta.get("closing_date"), "holdings": meta["holdings"]},
+            )
+            out["holdings"] = result
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Statement holdings not recorded: %s", e)
+            out["holdings_error"] = str(e)[:200]
+    return out
+
+
 def _api_error_detail(error: httpx.HTTPStatusError) -> str:
     try:
         return str(error.response.json().get("detail", error.response.text))
@@ -58,6 +85,10 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
 
         api_client = await get_api_client()
 
+        # what a known broker/savings statement says beyond its rows (closing balance, holdings at statement date)
+        meta = next((r.pop("__meta__") for r in extracted_data if isinstance(r, dict) and "__meta__" in r), None)
+        extracted_data = [r for r in extracted_data if not (isinstance(r, dict) and r.get("date") is None and "amount" not in r)]
+
         is_pdf = extracted_data and all("pdf_text" in r for r in extracted_data)
         _jobs[job_id].update({
             "step": "parsing",
@@ -71,6 +102,8 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
 
         transactions = await TransactionParser.extract_async(extracted_data, on_chunk_done=on_chunk_done)
 
+        extras = await _record_statement_meta(api_client, account_id, meta) if meta else {}
+
         if not transactions:
             _jobs[job_id] = {
                 "status": "complete",
@@ -81,6 +114,7 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
                     "transactions_added": 0,
                     "transactions_skipped": 0,
                     "transactions": [],
+                    **extras,
                 },
             }
             return
@@ -123,6 +157,9 @@ async def _run_statement_job(job_id: str, filename: str, file_content: bytes, ac
                 "invalid_rows": imported["invalid_rows"],
                 # automatic categories are suggestions: these are waiting in the review queue
                 "needs_review": sum(1 for t in imported["transactions"] if not t.get("reviewed")),
+                "absorbed_mute_rows": imported.get("absorbed_mute_rows", 0),
+                "suspect_duplicates": imported.get("suspect_duplicates", 0),
+                **extras,
             },
         }
 

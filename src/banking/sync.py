@@ -234,11 +234,12 @@ class BankSync:
         report.without_description = len(mute)
         for row in mute:
             row.pop("has_description", None)
-            row.update(category="uncategorized", category_source="fallback", confidence=None)
+            # a placeholder the next statement upload will take over (same amount and date, with the words)
+            row.update(category="uncategorized", category_source="fallback", confidence=None, mute=True)
         if described:
             described = await classify_for_import(described, self.api, self.llm_factory())
         payload = [
-            {k: v for k, v in row.items() if k in ("date", "amount", "description", "currency", "category", "category_source", "confidence", "external_id")}
+            {k: v for k, v in row.items() if k in ("date", "amount", "description", "currency", "category", "category_source", "confidence", "external_id", "mute")}
             for row in described + mute
         ]
         imported = await self.api.request(
