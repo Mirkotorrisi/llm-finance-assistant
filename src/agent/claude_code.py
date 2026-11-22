@@ -482,6 +482,15 @@ class ClaudeCodeBackend(AgentBackend):
         async with session.lock:
             await session.start()
 
+    def has_session(self, session_id: str, user_id: str, workspace_id: int | None = None) -> bool:
+        session = self._sessions.get(session_id)
+        return (
+            session is not None
+            and session.user_id == user_id
+            and session.workspace_id == workspace_id
+            and session.turns_completed > 0  # a warmed, never used process knows nothing yet
+        )
+
     async def aclose(self) -> None:
         if self._reaper:
             self._reaper.cancel()

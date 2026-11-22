@@ -62,6 +62,13 @@ class AgentBackend(ABC):
     async def warm(self, session_id: str, user_id: str, workspace_id: int | None = None) -> None:
         """Optionally prepare a session ahead of the first message."""
 
+    def has_session(self, session_id: str, user_id: str, workspace_id: int | None = None) -> bool:
+        """Whether this engine still holds the conversation of ``session_id`` for that user and project.
+
+        False after a restart or an expired session: the chat route then replays the stored transcript.
+        """
+        return False
+
     async def aclose(self) -> None:
         """Release resources (processes, clients)."""
 

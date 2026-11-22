@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from src.agent import shutdown_backend
+from src.chat_history import shutdown_history
 from src.routes.agent_chat import router as agent_chat_router
 from src.routes.amazon import router as amazon_router
 from src.routes.banking import router as banking_router, scheduler as bank_scheduler
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI):
     yield
     await bank_scheduler().stop()
     await shutdown_backend()
+    await shutdown_history()
     client = await get_api_client()
     await client.disconnect()
     reset_api_client()

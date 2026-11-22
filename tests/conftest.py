@@ -25,6 +25,11 @@ def no_real_llm(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.delenv("FINANCE_LLM_PROVIDER", raising=False)
     monkeypatch.delenv("FINANCE_BACKEND", raising=False)
+    # the chat route records turns in the API's chat history: never into the developer's real database
+    monkeypatch.setenv("FINANCE_CHAT_HISTORY", "off")
+    import src.chat_history as chat_history
+
+    monkeypatch.setattr(chat_history, "_store", None)
     # bank sync never reaches a real bank in tests: unconfigured, scheduler off, secrets in a temp folder
     monkeypatch.setenv("FINANCE_BANK_SYNC", "off")
     monkeypatch.delenv("ENABLE_BANKING_APP_ID", raising=False)

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from src.agent import get_backend
 from src.agent.confirm import ToolError, execute, pending_actions
+from src.chat_history import get_history, with_transcript
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["agent-chat"])
@@ -40,20 +41,66 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+class _TurnRecord:
+    """What a turn produced, for the history: the final text, the components shown, the tools called, the error."""
+
+    def __init__(self) -> None:
+        self.text = ""
+        self.components: list = []
+        self.tools: list = []
+        self.error: Optional[str] = None
+
+    def see(self, event: dict) -> None:
+        kind = event.get("type")
+        if kind == "status":
+            self.tools.append(event.get("tool"))
+        elif kind == "text_delta":
+            self.text += event.get("text") or ""
+        elif kind == "ui_component":
+            self.components.append(event.get("component"))
+        elif kind == "done":
+            self.text = event.get("text") or self.text
+            ui = event.get("ui") or {}
+            self.components = list(ui.get("components") or self.components)
+        elif kind == "error":
+            self.error = event.get("message") or "error"
+
+    @property
+    def worth_keeping(self) -> bool:
+        return bool(self.text.strip() or self.components or self.error)
+
+
 @router.post("/chat/stream")
 async def chat_stream(request: StreamChatRequest):
-    """Server-sent events: status / text_delta / ui_component events, then done or error."""
+    """Server-sent events: status / text_delta / ui_component events, then done or error.
+
+    Every turn is recorded in the chat history (API ``/api/chat-sessions``) so the conversation can be reopened;
+    when the engine no longer holds the session (restart, expiry) the stored transcript is replayed to it first.
+    """
     backend = get_backend()
+    history = get_history()
+    sid, uid, wid = request.session_id, request.user_id, request.workspace_id
 
     async def generate():
+        message = request.message
+        if not backend.has_session(sid, uid, wid):
+            message = with_transcript(await history.transcript(sid, uid, wid), message)
+        await history.record(sid, uid, wid, "user", request.message, backend=backend.name)
+        record = _TurnRecord()
         try:
-            async for event in backend.run_turn(request.session_id, request.user_id, request.message, request.workspace_id):
+            async for event in backend.run_turn(sid, uid, message, wid):
+                record.see(event)
                 yield _sse(event)
         except asyncio.CancelledError:
+            if record.worth_keeping:  # the client went away mid-answer: keep what was said so far
+                asyncio.ensure_future(history.record(sid, uid, wid, "assistant", record.text, record.components, record.tools, "interrupted"))
             raise
         except Exception as e:
             logger.error("chat/stream failed: %s", e, exc_info=True)
+            record.error = str(e)
             yield _sse({"type": "error", "message": str(e)})
+        if record.worth_keeping:
+            await history.record(sid, uid, wid, "assistant", record.text, record.components, record.tools, record.error, backend.name)
 
     return StreamingResponse(
         generate(),

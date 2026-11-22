@@ -126,6 +126,10 @@ class OpenAIToolsBackend(AgentBackend):
         conv.last_used = now
         return conv
 
+    def has_session(self, session_id: str, user_id: str, workspace_id: int | None = None) -> bool:
+        conv = self._sessions.get(session_id)
+        return conv is not None and conv.user_id == user_id and conv.workspace_id == workspace_id and bool(conv.messages)
+
     # ------------------------------------------------------------------ one turn
 
     async def run_turn(
